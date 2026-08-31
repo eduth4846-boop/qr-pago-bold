@@ -671,8 +671,18 @@ const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 const ADMIN_PASSWORD = '1234';
 const WHATSAPP_NUMBER = '573192153328';
 const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
-// Proyecto Supabase usado por la aplicación y sus Edge Functions.
 const EDGE_FUNCTIONS_URL = SUPA_URL + '/functions/v1';
+
+// Id de orden Bold persistido durante el checkout para soportar la redirección.
+function saveBoldOrder(orderId, solicitudId){
+  try{
+    if(orderId) sessionStorage.setItem('glm_bold_order_id', String(orderId));
+    if(solicitudId) sessionStorage.setItem('glm_bold_solicitud_id', String(solicitudId));
+  }catch(e){}
+}
+function clearBoldOrder(){
+  try{ sessionStorage.removeItem('glm_bold_order_id'); sessionStorage.removeItem('glm_bold_solicitud_id'); }catch(e){}
+}
 
 /* =========================================================
    UTILIDADES
@@ -1494,94 +1504,54 @@ const UsuarioApp = {
     const btn = document.getElementById('boldPagarBtn');
     if(btn){ btn.disabled = true; btn.textContent = 'Preparando pago...'; }
     try{
-      if(!this.compra || !this.compra.evento || !this.compra.comprador){
-        throw new Error('La información de la compra está incompleta.');
-      }
-
-      const items = Object.values(this.compra.seleccion || {}).map(x=>({
-        asiento_id: x.asiento.id,
-        zona: x.asiento.zona,
-        categoria: x.asiento.zona,
-        ubicacion_detalle: this.seatLabel(x.asiento),
-        precio: Number(x.precio || 0)
+      const items = Object.values(this.compra.seleccion).map(x=>({
+        asiento_id: x.asiento.id, zona: x.asiento.zona, categoria: x.asiento.zona,
+        ubicacion_detalle: this.seatLabel(x.asiento), precio: x.precio
       }));
-
-      if(!items.length){
-        throw new Error('No hay tickets seleccionados para pagar.');
-      }
-
-      // Usamos el cliente oficial de Supabase para invocar la Edge Function.
-      // Esto evita mantener manualmente la llamada fetch y sus cabeceras.
-      const payload = {
-        evento_id: this.compra.evento.id,
-        sala: this.compra.sala,
-        nombre: this.compra.comprador.nombre,
-        cedula: this.compra.comprador.cedula,
-        correo: this.compra.comprador.correo,
-        telefono: this.compra.comprador.telefono,
-        items,
-        total: Number(total || 0)
-      };
-
-      const { data, error } = await sb.functions.invoke('bold-crear-orden', {
-        body: payload
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/bold-crear-orden', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'Authorization':'Bearer '+SUPA_KEY, 'apikey':SUPA_KEY},
+        body: JSON.stringify({
+          evento_id: this.compra.evento.id,
+          sala: this.compra.sala,
+          nombre: this.compra.comprador.nombre,
+          cedula: this.compra.comprador.cedula,
+          correo: this.compra.comprador.correo,
+          telefono: this.compra.comprador.telefono,
+          items, total
+        })
       });
-
-      if(error){
-        console.error('bold-crear-orden:', error);
-        let detail = error.message || 'No se pudo contactar la función de pago.';
-        if(error.context){
-          try{
-            const txt = await error.context.text();
-            if(txt) detail += ' · ' + txt.slice(0,300);
-          }catch(_e){}
-        }
-        throw new Error(detail);
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error){
+        toast('No se pudo iniciar el pago: '+(data.error||'error desconocido'), true);
+        if(btn){ btn.disabled=false; btn.textContent='💳 Pagar con Bold (tarjeta, PSE, Nequi)'; }
+        return;
       }
 
-      if(!data){
-        throw new Error('La función bold-crear-orden no devolvió datos. Revisa Edge Functions → Logs.');
-      }
-
-      if(data.error){
-        throw new Error(data.error);
-      }
-
-      const orderId = data.order_id || data['bold-order-id'] || data.bold_order_id;
-      const amount = data.amount != null ? data.amount : total;
-      const apiKey = data.api_key || data['api-key'];
-      const integrity = data.integrity_signature || data['integrity-signature'];
-      const currency = data.currency || 'COP';
-      const redirectUrl = data.redirection_url || data['redirection-url'];
-
-      if(!orderId || !apiKey || !integrity || !redirectUrl){
-        console.error('Respuesta incompleta de bold-crear-orden:', data);
-        throw new Error('La Edge Function respondió, pero faltan datos de Bold (order_id, api_key, integrity_signature o redirection_url).');
-      }
+      saveBoldOrder(data.order_id, data.solicitud_id);
 
       const modal = document.getElementById('pagoModal');
       if(modal) modal.remove();
 
+      // Bold recomienda integrar el botón mediante atributos data-*.
+      // El monto, order-id y hash llegan del backend; la llave secreta nunca llega al navegador.
       const wrap = document.createElement('div');
       wrap.id = 'boldDynamicCheckout';
       wrap.style.cssText = 'position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.78);padding:20px;';
-
       const card = document.createElement('div');
       card.style.cssText = 'background:#140b28;border:1px solid #3d2a6b;border-radius:16px;padding:22px;max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.55);text-align:center;';
-      card.innerHTML = `<h3 style="margin:0 0 8px;font-family:Orbitron,sans-serif;">Pago seguro con Bold</h3><p class="hint" style="margin:0 0 16px;">Orden ${escapeHtml(orderId)} · ${money(amount)}</p>`;
-
+      card.innerHTML = `<h3 style="margin:0 0 8px;font-family:Orbitron,sans-serif;">Pago seguro con Bold</h3><p class="hint" style="margin:0 0 16px;">Orden ${escapeHtml(data.order_id||'')} · ${money(data.amount)}</p>`;
       const form = document.createElement('form');
       form.style.cssText='display:flex;justify-content:center;';
-
       const boldScript = document.createElement('script');
       boldScript.src = 'https://checkout.bold.co/library/boldPaymentButton.js';
       boldScript.setAttribute('data-bold-button','dark-L');
-      boldScript.setAttribute('data-order-id', orderId);
-      boldScript.setAttribute('data-currency', currency);
-      boldScript.setAttribute('data-amount', String(amount));
-      boldScript.setAttribute('data-api-key', apiKey);
-      boldScript.setAttribute('data-integrity-signature', integrity);
-      boldScript.setAttribute('data-redirection-url', redirectUrl);
+      boldScript.setAttribute('data-order-id', data.order_id);
+      boldScript.setAttribute('data-currency', data.currency || 'COP');
+      boldScript.setAttribute('data-amount', String(data.amount));
+      boldScript.setAttribute('data-api-key', data.api_key);
+      boldScript.setAttribute('data-integrity-signature', data.integrity_signature);
+      boldScript.setAttribute('data-redirection-url', data.redirection_url);
       boldScript.setAttribute('data-description', data.description || 'Compra de tickets GLM Eventos');
       boldScript.setAttribute('data-customer-data', JSON.stringify({
         email: this.compra.comprador.correo,
@@ -1591,15 +1561,8 @@ const UsuarioApp = {
         documentNumber: this.compra.comprador.cedula,
         documentType: 'CC'
       }));
-
-      boldScript.onerror = ()=>{
-        console.error('No se pudo cargar boldPaymentButton.js');
-        toast('No se pudo cargar la pasarela de Bold. Revisa tu conexión o bloqueadores del navegador.', true);
-      };
-
       form.appendChild(boldScript);
       card.appendChild(form);
-
       const cancel = document.createElement('button');
       cancel.type='button';
       cancel.className='btn btn-ghost btn-block';
@@ -1607,22 +1570,17 @@ const UsuarioApp = {
       cancel.textContent='Cancelar';
       cancel.onclick=()=>wrap.remove();
       card.appendChild(cancel);
-
       wrap.appendChild(card);
       document.body.appendChild(wrap);
 
-      // La orden ya quedó creada en backend; evitamos duplicar el checkout local.
+      // Conservamos la compra en Supabase y dejamos la selección local vacía para evitar doble pago.
       this.compra.seleccion = {};
       this.renderSeleccionUI();
-
     }catch(err){
-      console.error('Error iniciando el pago con Bold:', err);
-      const message = err && err.message ? err.message : String(err);
-      toast('Error iniciando el pago con Bold: ' + message, true);
+      toast('Error iniciando el pago con Bold: '+(err.message||err), true);
       if(btn){ btn.disabled = false; btn.textContent = '💳 Pagar con Bold (tarjeta, PSE, Nequi)'; }
     }
   },
-
   async enviarComprobante(total){
     const fileInput = document.getElementById('pagoComprobante');
     const file = fileInput.files[0];
@@ -1644,7 +1602,7 @@ const UsuarioApp = {
         cedula: this.compra.comprador.cedula,
         correo: this.compra.comprador.correo,
         telefono: this.compra.comprador.telefono,
-        items, total, comprobante_url, estado:'pendiente'
+        items, total, comprobante_url, estado:'pendiente', metodo_pago:'transferencia'
       }).select();
       if(error){ toast('No se pudo enviar la solicitud: '+error.message, true); btn.disabled=false; btn.textContent='Enviar comprobante'; return; }
       const solicitudId = data[0].id;
@@ -1670,7 +1628,7 @@ const UsuarioApp = {
       return `<div class="stat" style="margin-bottom:8px;">
         <div>${fmtTime(s.created_at)} ${badge}</div>
         <div class="hint">${(s.items||[]).map(it=>escapeHtml(it.ubicacion_detalle)).join(', ')} · ${money(s.total)}</div>
-        ${s.estado==='aprobada'?'<p class="hint">Ingresa a "Mis tickets" con tu correo o cédula para verlos.</p>':''}
+        ${s.metodo_pago==='bold' && s.bold_status ? `<p class="hint">Pago Bold: ${escapeHtml(s.bold_status)}</p>` : ''}${s.estado==='aprobada'?'<p class="hint">Ingresa a "Mis tickets" con tu correo o cédula para verlos.</p>':''}
       </div>`;
     }).join('');
   }
@@ -1709,7 +1667,7 @@ const AdminApp = {
       .subscribe();
   },
   async checkComprasPendientes(){
-    const {data, count} = await sb.from('solicitudes_compra').select('id,created_at',{count:'exact'}).eq('estado','pendiente').order('created_at',{ascending:false}).limit(1);
+    const {data, count} = await sb.from('solicitudes_compra').select('id,created_at',{count:'exact'}).eq('estado','pendiente').eq('metodo_pago','transferencia').order('created_at',{ascending:false}).limit(1);
     const total = count || 0;
     const newestId = data && data[0] ? data[0].id : null;
     if(total>0 && newestId !== this.comprasAlert.lastId){
@@ -1976,10 +1934,11 @@ const AdminApp = {
             <span class="hint">${escapeHtml(s.correo)} · ${escapeHtml(s.cedula)} · ${escapeHtml(s.telefono||'')}</span>
             <div class="hint" style="margin-top:6px;">${items}</div>
             <div><b>Total: ${money(s.total)}</b></div>
+            <div class="hint">Método: ${escapeHtml(s.metodo_pago||'transferencia')}${s.bold_status ? ' · Bold: '+escapeHtml(s.bold_status) : ''}</div>
           </div>
           ${s.comprobante_url ? `<img src="${s.comprobante_url}" class="comprobante-thumb" onclick="AdminApp.zoomImg('${s.comprobante_url}')">` : ''}
         </div>
-        ${s.estado==='pendiente' ? `<div class="row" style="margin-top:10px;">
+        ${s.estado==='pendiente' && s.metodo_pago!=='bold' ? `<div class="row" style="margin-top:10px;">
           <button class="btn btn-sm btn-primary" onclick="AdminApp.aprobarSolicitud('${s.id}')">Autorizar</button>
           <button class="btn btn-sm btn-danger" onclick="AdminApp.rechazarSolicitud('${s.id}')">Rechazar</button>
           <button class="btn btn-sm" onclick="AdminApp.tab('a-chat'); setTimeout(()=>AdminApp.openRoom('${s.sala}'),50)">Ver chat</button>
@@ -2024,6 +1983,7 @@ const AdminApp = {
     const sol = data && data[0];
     if(!sol){ toast('Solicitud no encontrada', true); return; }
     if(sol.estado==='aprobada'){ toast('Esta solicitud ya fue aprobada'); return; }
+    if(sol.metodo_pago==='bold'){ toast('Las compras pagadas con Bold se confirman automáticamente mediante el webhook.'); return; }
     const rows = (sol.items||[]).map(it=>({
       evento_id: sol.evento_id,
       codigo: genCode('TK'),
@@ -2042,7 +2002,7 @@ const AdminApp = {
     const {data: created, error} = await sb.from('tickets').insert(rows).select();
     if(error){ toast('Error creando los tickets: '+error.message, true); return; }
     await Promise.all((sol.items||[]).map((it,i)=> it.asiento_id ? sb.from('asientos').update({ticket_id: created[i].id, ocupado:true}).eq('id', it.asiento_id) : Promise.resolve()));
-    await sb.from('solicitudes_compra').update({estado:'aprobada'}).eq('id', id);
+    await sb.from('solicitudes_compra').update({estado:'aprobada', metodo_pago:'transferencia'}).eq('id', id);
     this.ticketsPorSolicitud[id] = created;
     await ChatKit.send(sol.sala, 'Admin', 'admin', 'Tu compra fue aprobada. Ya puedes ver tu(s) ticket(s) ingresando con tu correo o cédula en "Mis entradas".');
     toast('Compra aprobada y tickets generados');
@@ -2057,6 +2017,7 @@ const AdminApp = {
     const sol = data && data[0];
     if(!sol){ toast('Solicitud no encontrada', true); return; }
     if(sol.estado!=='pendiente'){ toast('Esta solicitud ya fue procesada'); return; }
+    if(sol.metodo_pago==='bold'){ toast('Una orden Bold no se rechaza manualmente desde este panel.'); return; }
     await Promise.all((sol.items||[]).map(it=> it.asiento_id ? sb.from('asientos').update({ocupado:false, ticket_id:null}).eq('id', it.asiento_id) : Promise.resolve()));
     await sb.from('solicitudes_compra').update({estado:'rechazada'}).eq('id', id);
     await ChatKit.send(sol.sala, 'Admin', 'admin', 'Tu comprobante fue rechazado. Por favor contáctanos por este chat para más información.');
@@ -2817,9 +2778,12 @@ document.addEventListener('DOMContentLoaded', ()=>{
 ========================================================= */
 async function checkBoldReturn(){
   const params = new URLSearchParams(location.search);
-  const orderId = params.get('bold-order-id') || params.get('bold_order_id');
+  const orderId = params.get('bold-order-id') || params.get('bold_order_id') || sessionStorage.getItem('glm_bold_order_id');
   if(!orderId) return;
+
+  const solicitudId = params.get('solicitud_id') || params.get('solicitud-id') || sessionStorage.getItem('glm_bold_solicitud_id') || '';
   history.replaceState(null, '', location.pathname + location.hash);
+
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-bg" id="boldResultModal">
       <div class="modal" style="text-align:center;">
@@ -2828,23 +2792,46 @@ async function checkBoldReturn(){
         <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="document.getElementById('boldResultModal').remove()">Cerrar</button>
       </div>
     </div>`);
+
   let estado = 'pendiente_pago';
-  for(let i=0;i<8;i++){
+  let ticketsEncontrados = 0;
+
+  for(let i=0;i<10;i++){
     try{
-      const { data, error } = await sb.functions.invoke('bold-verificar-pago', {
-        body: { order_id: orderId }
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/bold-verificar-pago?order_id=' + encodeURIComponent(orderId), {
+        headers: {'Authorization':'Bearer '+SUPA_KEY, 'apikey':SUPA_KEY}
       });
-      if(error) throw error;
-      estado = data?.estado || estado;
-    }catch(e){ /* seguimos intentando */ }
-    if(estado==='aprobada' || estado==='rechazada') break;
+      const data = await res.json().catch(()=>({}));
+      estado = data.estado || estado;
+
+      // La confirmación visible al comprador exige tickets creados.
+      // Esto evita mostrar "Pago confirmado" si la verificación terminó antes que el webhook.
+      if(solicitudId){
+        const tkRes = await sb.from('tickets').select('id').eq('solicitud_compra_id', solicitudId);
+        ticketsEncontrados = (tkRes.data || []).length;
+      }
+
+      if(estado==='rechazada') break;
+      if(estado==='aprobada' && ticketsEncontrados > 0) break;
+    }catch(e){
+      // Se sigue intentando porque el webhook de Bold puede llegar unos segundos después.
+    }
     await new Promise(r=>setTimeout(r, 2500));
   }
+
   const msg = document.getElementById('boldResultMsg');
   if(msg){
-    if(estado==='aprobada') msg.innerHTML = '¡Pago confirmado! 🎉 Ingresa a "Comprar tickets → Mis tickets" con tu correo o cédula para ver tus entradas.';
-    else if(estado==='rechazada') msg.innerHTML = 'El pago no fue aprobado por Bold. Puedes intentarlo de nuevo desde "Comprar tickets".';
-    else msg.innerHTML = 'Seguimos confirmando tu pago con el banco. En unos minutos podrás ver tus tickets ingresando con tu correo o cédula.';
+    if(estado==='aprobada' && ticketsEncontrados>0){
+      msg.innerHTML = '¡Pago confirmado y entradas generadas! 🎉 Ingresa a "Comprar tickets → Mis tickets" con tu correo o cédula para ver tus entradas.';
+      clearBoldOrder();
+    }else if(estado==='rechazada'){
+      msg.innerHTML = 'El pago no fue aprobado por Bold. Puedes intentarlo de nuevo desde "Comprar tickets".';
+      clearBoldOrder();
+    }else if(estado==='aprobada'){
+      msg.innerHTML = 'El pago fue aprobado y estamos terminando de generar tus entradas. Espera unos segundos y consulta "Mis tickets" con tu correo o cédula.';
+    }else{
+      msg.innerHTML = 'Seguimos confirmando tu pago con el banco. En unos minutos podrás ver tus tickets ingresando con tu correo o cédula.';
+    }
   }
 }
 </script>
