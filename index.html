@@ -1491,7 +1491,6 @@ const UsuarioApp = {
   },
   async pagarConBold(total){
     const btn = document.getElementById('boldPagarBtn');
-    if(typeof BoldCheckout==='undefined'){ toast('No se pudo cargar la pasarela de Bold. Revisa tu conexión e intenta de nuevo.', true); return; }
     if(btn){ btn.disabled = true; btn.textContent = 'Preparando pago...'; }
     try{
       const items = Object.values(this.compra.seleccion).map(x=>({
@@ -1511,24 +1510,57 @@ const UsuarioApp = {
           items, total
         })
       });
-      const data = await res.json();
+      const data = await res.json().catch(()=>({}));
       if(!res.ok || data.error){
         toast('No se pudo iniciar el pago: '+(data.error||'error desconocido'), true);
         if(btn){ btn.disabled=false; btn.textContent='💳 Pagar con Bold (tarjeta, PSE, Nequi)'; }
         return;
       }
+
       const modal = document.getElementById('pagoModal');
       if(modal) modal.remove();
-      const checkout = new BoldCheckout({
-        orderId: data.order_id,
-        currency: data.currency,
-        amount: data.amount,
-        apiKey: data.api_key,
-        integritySignature: data.integrity_signature,
-        description: 'Tickets ' + (this.compra.evento ? this.compra.evento.nombre : 'GLM Eventos'),
-        redirectionUrl: data.redirection_url
-      });
-      checkout.open();
+
+      // Bold recomienda integrar el botón mediante atributos data-*.
+      // El monto, order-id y hash llegan del backend; la llave secreta nunca llega al navegador.
+      const wrap = document.createElement('div');
+      wrap.id = 'boldDynamicCheckout';
+      wrap.style.cssText = 'position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.78);padding:20px;';
+      const card = document.createElement('div');
+      card.style.cssText = 'background:#140b28;border:1px solid #3d2a6b;border-radius:16px;padding:22px;max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.55);text-align:center;';
+      card.innerHTML = `<h3 style="margin:0 0 8px;font-family:Orbitron,sans-serif;">Pago seguro con Bold</h3><p class="hint" style="margin:0 0 16px;">Orden ${escapeHtml(data.order_id||'')} · ${money(data.amount)}</p>`;
+      const form = document.createElement('form');
+      form.style.cssText='display:flex;justify-content:center;';
+      const boldScript = document.createElement('script');
+      boldScript.src = 'https://checkout.bold.co/library/boldPaymentButton.js';
+      boldScript.setAttribute('data-bold-button','dark-L');
+      boldScript.setAttribute('data-order-id', data.order_id);
+      boldScript.setAttribute('data-currency', data.currency || 'COP');
+      boldScript.setAttribute('data-amount', String(data.amount));
+      boldScript.setAttribute('data-api-key', data.api_key);
+      boldScript.setAttribute('data-integrity-signature', data.integrity_signature);
+      boldScript.setAttribute('data-redirection-url', data.redirection_url);
+      boldScript.setAttribute('data-description', data.description || 'Compra de tickets GLM Eventos');
+      boldScript.setAttribute('data-customer-data', JSON.stringify({
+        email: this.compra.comprador.correo,
+        fullName: this.compra.comprador.nombre,
+        phone: this.compra.comprador.telefono,
+        dialCode: '+57',
+        documentNumber: this.compra.comprador.cedula,
+        documentType: 'CC'
+      }));
+      form.appendChild(boldScript);
+      card.appendChild(form);
+      const cancel = document.createElement('button');
+      cancel.type='button';
+      cancel.className='btn btn-ghost btn-block';
+      cancel.style.marginTop='14px';
+      cancel.textContent='Cancelar';
+      cancel.onclick=()=>wrap.remove();
+      card.appendChild(cancel);
+      wrap.appendChild(card);
+      document.body.appendChild(wrap);
+
+      // Conservamos la compra en Supabase y dejamos la selección local vacía para evitar doble pago.
       this.compra.seleccion = {};
       this.renderSeleccionUI();
     }catch(err){
@@ -2730,7 +2762,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
 ========================================================= */
 async function checkBoldReturn(){
   const params = new URLSearchParams(location.search);
-  const orderId = params.get('bold_order_id');
+  const orderId = params.get('bold-order-id') || params.get('bold_order_id');
   if(!orderId) return;
   history.replaceState(null, '', location.pathname + location.hash);
   document.body.insertAdjacentHTML('beforeend', `
