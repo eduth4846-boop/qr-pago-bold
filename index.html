@@ -295,9 +295,48 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 .role-card:hover::after{opacity:1;}
 
+/* ---------- slider de eventos (publicidad) ---------- */
+.evt-slider-wrap{position:relative; margin:30px 0 6px; overflow:hidden; border-radius:18px; border:1px solid var(--line-soft); background:var(--panel);}
+.evt-slider-track{display:flex; width:max-content; animation:evtSliderScroll linear infinite;}
+.evt-slider-track.paused{animation-play-state:paused;}
+@keyframes evtSliderScroll{from{transform:translateX(0);} to{transform:translateX(-50%);}}
+.evt-slide{
+  position:relative; flex:0 0 auto; width:300px; height:170px; margin-right:14px; border-radius:14px; overflow:hidden;
+  cursor:pointer; border:1px solid var(--line-soft); background:#0e0a1e;
+}
+@media(max-width:600px){.evt-slide{width:230px; height:130px;}}
+.evt-slide img{width:100%; height:100%; object-fit:cover; display:block; transition:.35s;}
+.evt-slide:hover img{transform:scale(1.06);}
+.evt-slide .evt-slide-fallback{
+  width:100%; height:100%; display:flex; align-items:center; justify-content:center; text-align:center; padding:10px;
+  font-family:'Orbitron',sans-serif; font-size:15px; background:linear-gradient(160deg, rgba(255,46,224,.25), rgba(0,240,255,.18));
+}
+.evt-slide .evt-slide-info{
+  position:absolute; left:0; right:0; bottom:0; padding:10px 12px 8px;
+  background:linear-gradient(0deg, rgba(0,0,0,.82), rgba(0,0,0,0));
+  color:#fff;
+}
+.evt-slide .evt-slide-info b{display:block; font-size:14px; font-family:'Orbitron',sans-serif;}
+.evt-slide .evt-slide-info span{font-size:11px; opacity:.85;}
+.evt-slide .evt-slide-cta{
+  position:absolute; top:8px; right:8px; font-size:10px; padding:3px 8px; border-radius:20px;
+  background:rgba(0,240,255,.9); color:#0a0a0a; font-weight:700; letter-spacing:.02em;
+}
+.evt-picker-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px; margin-top:16px;}
+.evt-picker-card{
+  background:var(--panel); border:1px solid var(--line-soft); border-radius:14px; overflow:hidden; cursor:pointer;
+  transition:.2s;
+}
+.evt-picker-card:hover{border-color:var(--cyan); transform:translateY(-3px);}
+.evt-picker-card img{width:100%; height:120px; object-fit:cover; display:block; background:#0e0a1e;}
+.evt-picker-card .evt-picker-body{padding:10px 12px;}
+.evt-picker-card b{display:block; font-family:'Orbitron',sans-serif; font-size:14px;}
+.evt-picker-card span{font-size:11.5px; color:var(--text-dim);}
+.evt-picker-empty{padding:20px; text-align:center; color:var(--text-dim);}
+
 .auth-shell{max-width:420px; margin:40px auto;}
-.auth-shell .back{cursor:pointer; color:var(--text-dim); font-size:13px; margin-bottom:16px; display:inline-block; transition:.2s;}
-.auth-shell .back:hover{color:var(--cyan); text-shadow:0 0 8px rgba(0,240,255,.6);}
+.back{cursor:pointer; color:var(--text-dim); font-size:13px; margin-bottom:16px; display:inline-block; transition:.2s;}
+.back:hover{color:var(--cyan); text-shadow:0 0 8px rgba(0,240,255,.6);}
 
 /* ---------- ticket / holographic sticker ---------- */
 .ticket{
@@ -506,6 +545,8 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <h1>Ingreso inteligente, dinero digital.</h1>
         <p>Plataforma de tickets y cashless dinámico para tus eventos. Elige tu perfil para continuar.</p>
       </div>
+      <div id="evtSliderWrap" class="hide"></div>
+
       <div class="role-grid">
         <div class="role-card" onclick="Router.go('login-usuario')">
           <span class="ic">🎫</span><b>Usuario</b><span>Ver mis entradas</span>
@@ -835,11 +876,16 @@ function escapeHtml(s){
 }
 // Sube un archivo al bucket de Storage "comprobantes" y devuelve su URL pública.
 async function uploadToComprobantes(file, folder){
+  return uploadToBucket('comprobantes', file, folder);
+}
+// Sube un archivo a cualquier bucket público de Storage y devuelve su URL pública.
+// Usado, entre otros, para las imágenes/flyers de los eventos (bucket "eventos").
+async function uploadToBucket(bucket, file, folder){
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g,'_');
   const path = `${folder}/${Date.now()}_${safeName}`;
-  const {error} = await sb.storage.from('comprobantes').upload(path, file, {upsert:true});
+  const {error} = await sb.storage.from(bucket).upload(path, file, {upsert:true});
   if(error) throw error;
-  const {data} = sb.storage.from('comprobantes').getPublicUrl(path);
+  const {data} = sb.storage.from(bucket).getPublicUrl(path);
   return data.publicUrl;
 }
 
@@ -856,6 +902,7 @@ const Router = {
     window.scrollTo({top:0, behavior:'smooth'});
     if(view==='login-qr') QRApp.loadUserList();
     if(view==='login-vt') VTApp.loadUserList();
+    if(view==='landing') EventSlider.load();
   }
 };
 
@@ -926,12 +973,13 @@ const Seats = {
   // Agrega asientos nuevos (palcos y/o VIP) sin tocar los ya existentes,
   // usado cuando el admin aumenta las cantidades desde "Ajustar palcos/VIP".
   async growToMapa(evento){
-    const mapa = evento.mapa || {palcos:8, vip:30, general:120};
+    const mapa = evento.mapa || {palcos:0, vip:0, general:0};
     const existentes = await this.all(evento.id);
     const palcosExistentes = new Set(existentes.filter(a=>a.zona==='palco').map(a=>a.numero.split('-')[0]));
     const vipExistentes = existentes.filter(a=>a.zona==='vip').length;
+    const generalExistentes = existentes.filter(a=>a.zona==='general').length;
     const rows = [];
-    for(let p=1;p<=mapa.palcos;p++){
+    for(let p=1;p<=(mapa.palcos||0);p++){
       if(palcosExistentes.has(`P${p}`)) continue;
       for(let s=1;s<=8;s++){
         rows.push({evento_id:evento.id, zona:'palco', numero:`P${p}-S${s}`});
@@ -939,6 +987,9 @@ const Seats = {
     }
     for(let v=vipExistentes+1; v<=(mapa.vip||0); v++){
       rows.push({evento_id:evento.id, zona:'vip', numero:`V${v}`});
+    }
+    for(let g=generalExistentes+1; g<=(mapa.general||0); g++){
+      rows.push({evento_id:evento.id, zona:'general', numero:`G${g}`});
     }
     if(rows.length) await sb.from('asientos').insert(rows);
   },
@@ -1274,12 +1325,68 @@ const ChatKit = {
 /* =========================================================
    USUARIO APP
 ========================================================= */
+/* =========================================================
+   SLIDER DE EVENTOS (publicidad dinámica, sin límite, loop)
+========================================================= */
+const EventSlider = {
+  eventos: [],
+  async load(){
+    const {data, error} = await sb.from('eventos').select('*').eq('estado','activo').order('created_at',{ascending:false});
+    this.eventos = (!error && data) ? data : [];
+    this.render();
+  },
+  render(){
+    const wrap = document.getElementById('evtSliderWrap');
+    if(!wrap) return;
+    if(!this.eventos.length){ wrap.classList.add('hide'); wrap.innerHTML=''; return; }
+    wrap.classList.remove('hide');
+    // Se duplica la lista para lograr un loop infinito sin cortes, sin importar
+    // cuántos eventos haya creado el admin ("sin límite").
+    const items = this.eventos.concat(this.eventos).map(e=>this.slideHtml(e)).join('');
+    const speed = Math.max(18, this.eventos.length * 6);
+    wrap.innerHTML = `
+      <div class="evt-slider-track" id="evtSliderTrack" style="animation-duration:${speed}s;">${items}</div>`;
+    const track = document.getElementById('evtSliderTrack');
+    if(track){
+      track.addEventListener('mouseenter', ()=>track.classList.add('paused'));
+      track.addEventListener('mouseleave', ()=>track.classList.remove('paused'));
+    }
+  },
+  slideHtml(e){
+    const fecha = e.fecha ? `${e.fecha}${e.hora?' · '+e.hora:''}` : 'Fecha por confirmar';
+    const img = e.imagen_url
+      ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+         <div class="evt-slide-fallback" style="display:none;">${escapeHtml(e.nombre)}</div>`
+      : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`;
+    return `
+      <div class="evt-slide" onclick="EventSlider.selectEvento('${e.id}')">
+        ${img}
+        <span class="evt-slide-cta">Comprar</span>
+        <div class="evt-slide-info"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(fecha)}</span></div>
+      </div>`;
+  },
+  selectEvento(id){
+    const evento = this.eventos.find(e=>e.id===id);
+    if(!evento){ toast('Este evento ya no está disponible', true); return; }
+    UsuarioApp.comprarEvento(evento);
+  }
+};
+
 const UsuarioApp = {
   tickets: [],
   evento: null,
   compra: null,
   goComprar(){
     Auth.setRole('usuario', {value:''}, 'Comprador');
+    this.compra = {evento:null, asientos:[], seleccion:{}, comprador:null, sala:null};
+    Router.go('usuario');
+    this.tab('u-comprar');
+  },
+  // Se llama al hacer clic en un evento del slider de publicidad: lleva
+  // directo a la interfaz de compra de ese evento específico.
+  comprarEvento(evento){
+    Auth.setRole('usuario', {value:''}, 'Comprador');
+    this.compra = {evento, asientos:[], seleccion:{}, comprador:null, sala:null};
     Router.go('usuario');
     this.tab('u-comprar');
   },
@@ -1377,10 +1484,40 @@ const UsuarioApp = {
   async renderComprar(){
     if(!this.compra) this.compra = {evento:null, asientos:[], seleccion:{}, comprador:null, sala:null};
     const box = document.getElementById('u-comprar');
+    // Paso 1: si aún no hay evento elegido, se muestra el botón/selector
+    // para que el cliente escoja a qué evento quiere comprar tickets.
+    if(!this.compra.evento){
+      box.innerHTML = `<div class="hint" style="padding:20px;">Cargando eventos disponibles…</div>`;
+      const {data} = await sb.from('eventos').select('*').eq('estado','activo').order('created_at',{ascending:false});
+      const eventos = data || [];
+      if(!eventos.length){
+        box.innerHTML = `<div class="card"><p class="hint">No hay eventos disponibles para la venta en este momento.</p></div>`;
+        return;
+      }
+      box.innerHTML = `
+        <div class="card" style="max-width:760px; margin:0 auto;">
+          <div class="section-title"><h2 style="font-size:19px;">¿A qué evento quieres comprar tickets?</h2></div>
+          <p class="hint">Elige el evento para continuar con tu compra.</p>
+          <div class="evt-picker-grid">
+            ${eventos.map(e=>`
+              <div class="evt-picker-card" onclick="UsuarioApp.elegirEventoCompra('${e.id}')">
+                ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
+                <div class="evt-picker-body">
+                  <b>${escapeHtml(e.nombre)}</b>
+                  <span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span>
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>`;
+      this._eventosCompraCache = eventos;
+      return;
+    }
     if(!this.compra.comprador){
       box.innerHTML = `
         <div class="card" style="max-width:520px; margin:0 auto;">
+          <span class="back" onclick="UsuarioApp.cambiarEventoCompra()">‹ elegir otro evento</span>
           <div class="section-title"><h2 style="font-size:19px;">Compra tu ticket</h2></div>
+          <p class="hint" style="margin-bottom:4px;">Evento: <b>${escapeHtml(this.compra.evento.nombre)}</b></p>
           <p class="hint" style="margin-bottom:14px;">Regístrate para elegir tu ubicación y realizar el pago.</p>
           <div class="field"><label>Nombre completo</label><input id="cmpNombre"></div>
           <div class="field"><label>Cédula</label><input id="cmpCedula"></div>
@@ -1391,6 +1528,16 @@ const UsuarioApp = {
       return;
     }
     await this.renderSeleccionUI();
+  },
+  elegirEventoCompra(id){
+    const evento = (this._eventosCompraCache||[]).find(e=>e.id===id);
+    if(!evento) return;
+    this.compra.evento = evento;
+    this.renderComprar();
+  },
+  cambiarEventoCompra(){
+    this.compra = {evento:null, asientos:[], seleccion:{}, comprador:null, sala:null};
+    this.renderComprar();
   },
   async registrarComprador(){
     const nombre = document.getElementById('cmpNombre').value.trim();
@@ -1726,6 +1873,9 @@ const AdminApp = {
         <div class="card">
           <div class="section-title"><h2 style="font-size:19px;">Crear evento</h2></div>
           <div class="field"><label>Nombre del evento</label><input id="evNombre" placeholder="ej: GLM Fest 2026"></div>
+          <div class="field"><label>Imagen / flyer del evento</label><input id="evImagen" type="file" accept="image/*">
+            <p class="hint" style="margin-top:4px;">Se mostrará en el slider de publicidad del inicio.</p>
+          </div>
           <div class="row">
             <div class="field" style="flex:1;"><label>Fecha</label><input id="evFecha" type="date"></div>
             <div class="field" style="flex:1;"><label>Hora</label><input id="evHora" type="time"></div>
@@ -1733,14 +1883,18 @@ const AdminApp = {
           <div class="row">
             <div class="field" style="flex:1;">
               <label>Cantidad de palcos</label>
-              <select id="evPalcos">${Array.from({length:20}).map((_,i)=>`<option value="${i+1}" ${i+1===8?'selected':''}>${i+1} palco${i+1>1?'s':''}</option>`).join('')}</select>
+              <select id="evPalcos">${[0,1,2,3,4,5,6,7,8,9,10,12,14,16,18,20].map(n=>`<option value="${n}" ${n===8?'selected':''}>${n===0?'0 (ninguno)':n+' palco'+(n>1?'s':'')}</option>`).join('')}</select>
             </div>
             <div class="field" style="flex:1;">
               <label>Puestos VIP</label>
-              <select id="evVip">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===30?'selected':''}>${n} puestos</option>`).join('')}</select>
+              <select id="evVip">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===30?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
             </div>
           </div>
-          <p class="hint">Podrás aumentar estas cantidades luego desde "Tus eventos" y se reflejarán en el mapa del evento.</p>
+          <div class="field">
+            <label>Cupos zona General</label>
+            <select id="evGeneral">${[0,20,50,80,120,150,200,300,400,500].map(n=>`<option value="${n}" ${n===120?'selected':''}>${n===0?'0 (ninguna)':n+' cupos'}</option>`).join('')}</select>
+          </div>
+          <p class="hint">Podrás aumentar estas cantidades luego desde "Tus eventos" y se reflejarán en el mapa del evento. Deja una zona en "0 / ninguno" si el evento no la tendrá; así no aparecerá como ubicación disponible.</p>
           <div class="row">
             <div class="field" style="flex:1;"><label>Precio Palco (por silla)</label><input id="evPrecioPalco" type="number" min="0" placeholder="0"></div>
             <div class="field" style="flex:1;"><label>Precio VIP</label><input id="evPrecioVip" type="number" min="0" placeholder="0"></div>
@@ -1778,15 +1932,19 @@ const AdminApp = {
           <div class="row">
             <div class="field" style="flex:1;">
               <label>Cantidad de palcos</label>
-              <select id="mapaEditPalcos-${e.id}">${Array.from({length:20}).map((_,i)=>`<option value="${i+1}" ${(i+1)===((e.mapa&&e.mapa.palcos)||8)?'selected':''}>${i+1} palco${i+1>1?'s':''}</option>`).join('')}</select>
+              <select id="mapaEditPalcos-${e.id}">${[0,1,2,3,4,5,6,7,8,9,10,12,14,16,18,20].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.palcos)||0)?'selected':''}>${n===0?'0 (ninguno)':n+' palco'+(n>1?'s':'')}</option>`).join('')}</select>
             </div>
             <div class="field" style="flex:1;">
               <label>Puestos VIP</label>
-              <select id="mapaEditVip-${e.id}">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.vip)!==undefined?(e.mapa&&e.mapa.vip):30)?'selected':''}>${n} puestos</option>`).join('')}</select>
+              <select id="mapaEditVip-${e.id}">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.vip)!==undefined?(e.mapa&&e.mapa.vip):30)?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
+            </div>
+            <div class="field" style="flex:1;">
+              <label>Cupos General</label>
+              <select id="mapaEditGeneral-${e.id}">${[0,20,50,80,120,150,200,300,400,500].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.general)!==undefined?(e.mapa&&e.mapa.general):120)?'selected':''}>${n===0?'0 (ninguna)':n+' cupos'}</option>`).join('')}</select>
             </div>
           </div>
           <button class="btn btn-primary btn-sm btn-block" onclick="AdminApp.guardarMapa('${e.id}')">Guardar y actualizar mapa</button>
-          <p class="hint">Solo se agregan palcos/puestos nuevos; los existentes y sus ocupantes no se modifican.</p>
+          <p class="hint">Solo se agregan palcos/puestos/cupos nuevos; los existentes y sus ocupantes no se modifican. Deja una zona en "0 / ninguno" para que no aparezca como ubicación disponible.</p>
         </div>
       </div>`).join('');
   },
@@ -1799,26 +1957,28 @@ const AdminApp = {
     if(!evento) return;
     const palcos = parseInt(document.getElementById('mapaEditPalcos-'+id).value, 10);
     const vip = parseInt(document.getElementById('mapaEditVip-'+id).value, 10);
-    const mapaActual = evento.mapa || {palcos:8, vip:30, general:120};
-    if(palcos < mapaActual.palcos || vip < mapaActual.vip){
+    const general = parseInt(document.getElementById('mapaEditGeneral-'+id).value, 10);
+    const mapaActual = evento.mapa || {palcos:0, vip:0, general:0};
+    if(palcos < (mapaActual.palcos||0) || vip < (mapaActual.vip||0) || general < (mapaActual.general||0)){
       toast('No se pueden reducir las cantidades, solo aumentarlas', true);
       return;
     }
-    const nuevoMapa = {...mapaActual, palcos, vip};
+    const nuevoMapa = {...mapaActual, palcos, vip, general};
     const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', id);
     if(error){ toast('Error actualizando el evento: '+error.message, true); console.error(error); return; }
     evento.mapa = nuevoMapa;
     if(this.evento && this.evento.id===id) this.evento.mapa = nuevoMapa;
     await Seats.growToMapa(evento);
-    toast('Mapa actualizado: '+palcos+' palcos, '+vip+' puestos VIP');
+    toast('Mapa actualizado: '+palcos+' palcos, '+vip+' VIP, '+general+' general');
     this.renderEventos();
   },
   async crearEvento(){
     const nombre = document.getElementById('evNombre').value.trim();
     const fecha = document.getElementById('evFecha').value || null;
     const hora = document.getElementById('evHora').value || null;
-    const palcos = parseInt(document.getElementById('evPalcos').value, 10) || 8;
+    const palcos = parseInt(document.getElementById('evPalcos').value, 10) || 0;
     const vip = parseInt(document.getElementById('evVip').value, 10) || 0;
+    const general = parseInt(document.getElementById('evGeneral').value, 10) || 0;
     if(!nombre){ toast('Escribe un nombre para el evento', true); return; }
     const codigo = genCode('EVT');
     const precios = {
@@ -1826,8 +1986,14 @@ const AdminApp = {
       vip: parseFloat(document.getElementById('evPrecioVip').value)||0,
       general: parseFloat(document.getElementById('evPrecioGeneral').value)||0
     };
-    const mapa = {palcos, vip, general:120, precios};
-    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa}).select();
+    const mapa = {palcos, vip, general, precios};
+    let imagen_url = null;
+    const imgFile = document.getElementById('evImagen').files[0];
+    if(imgFile){
+      try{ imagen_url = await uploadToBucket('eventos', imgFile, codigo); }
+      catch(e){ console.error(e); toast('El evento se creará, pero no se pudo subir la imagen: '+e.message, true); }
+    }
+    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url}).select();
     if(error){ toast('Error creando el evento: '+error.message, true); console.error(error); return; }
     toast('Evento creado: '+codigo);
     await this.loadEventos();
@@ -2508,9 +2674,9 @@ const QRApp = {
     const {data} = await sb.from('vendedores').select('*').eq('tipo','qr').eq('usuario', usuario).eq('password', pass).limit(1);
     if(!data || !data.length){ toast('Usuario o contraseña incorrectos', true); return; }
     this.identity = data[0];
-    this.evento = await DB.eventoActivo();
+    this.evento = null;
     Auth.setRole('qr', this.identity, 'QR · '+usuario);
-    renderEventPill(this.evento);
+    renderEventPill(null);
     Router.go('qr');
     this.tab('q-scan');
   },
@@ -2521,12 +2687,48 @@ const QRApp = {
     if(name==='q-scan') this.renderScan();
     if(name==='q-hist') this.renderHist();
   },
+  // Deja que el usuario de control de acceso escoja en qué evento va a
+  // escanear entradas, antes de mostrar la cámara/escáner.
+  async renderEventoPicker(){
+    const box = document.getElementById('q-scan');
+    box.innerHTML = `<div class="hint" style="padding:20px;">Cargando eventos…</div>`;
+    const {data} = await sb.from('eventos').select('*').eq('estado','activo').order('created_at',{ascending:false});
+    const eventos = data || [];
+    this._eventosCache = eventos;
+    if(!eventos.length){ box.innerHTML = `<div class="card"><p class="hint">No hay eventos activos disponibles.</p></div>`; return; }
+    box.innerHTML = `
+      <div class="card" style="max-width:760px; margin:0 auto;">
+        <div class="section-title"><h2 style="font-size:19px;">¿En qué evento vas a escanear?</h2></div>
+        <div class="evt-picker-grid">
+          ${eventos.map(e=>`
+            <div class="evt-picker-card" onclick="QRApp.elegirEvento('${e.id}')">
+              ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
+              <div class="evt-picker-body"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span></div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  },
+  elegirEvento(id){
+    const evento = (this._eventosCache||[]).find(e=>e.id===id);
+    if(!evento) return;
+    this.evento = evento;
+    renderEventPill(evento);
+    this.renderScan();
+  },
+  cambiarEvento(){
+    this.evento = null;
+    renderEventPill(null);
+    this.renderScan();
+  },
   renderScan(){
+    if(!this.evento){ this.renderEventoPicker(); return; }
     const box = document.getElementById('q-scan');
     const nfcSupported = 'NDEFReader' in window;
     box.innerHTML = `
       <div class="card" style="max-width:480px; margin:0 auto; text-align:center;">
+        <span class="back" onclick="QRApp.cambiarEvento()" style="display:inline-block; text-align:left;">‹ cambiar evento</span>
         <div class="section-title" style="justify-content:center;"><h2 style="font-size:19px;">Escanear entrada</h2></div>
+        <p class="hint">Evento: <b>${escapeHtml(this.evento.nombre)}</b></p>
         <div class="scan-stage"><div id="qr-reader"></div></div>
         <div class="row" style="justify-content:center; margin-top:14px;">
           <button class="btn" onclick="QRApp.startScanner()">▶ Iniciar cámara</button>
@@ -2567,6 +2769,9 @@ const QRApp = {
     const {data} = await sb.from('tickets').select('*').eq('codigo', codigo).limit(1);
     const ticket = data && data[0];
     if(!ticket){ this.showResult('bad', 'Entrada inválida', 'Este código no corresponde a ningún ticket.'); speak('Entrada inválida'); beepAlert(); return; }
+    if(this.evento && ticket.evento_id !== this.evento.id){
+      this.showResult('bad', 'Entrada de otro evento', 'Este ticket no pertenece al evento seleccionado.'); speak('Entrada inválida'); beepAlert(); return;
+    }
     const {data: evData} = await sb.from('eventos').select('*').eq('id', ticket.evento_id).limit(1);
     const evento = evData && evData[0];
     if(evento && evento.estado==='pausado'){ this.showResult('bad', 'Evento pausado', 'Los ingresos están pausados por el administrador.'); speak('Entrada inválida'); beepAlert(); return; }
@@ -2620,9 +2825,9 @@ const VTApp = {
     const {data} = await sb.from('vendedores').select('*').eq('tipo','vt').eq('usuario', usuario).eq('password', pass).limit(1);
     if(!data || !data.length){ toast('Usuario o contraseña incorrectos', true); return; }
     this.identity = data[0];
-    this.evento = await DB.eventoActivo();
+    this.evento = null;
     Auth.setRole('vt', this.identity, 'VT · '+usuario);
-    renderEventPill(this.evento);
+    renderEventPill(null);
     Router.go('vt');
     this.tab('v-vender');
   },
@@ -2634,12 +2839,46 @@ const VTApp = {
     if(name==='v-mis') this.renderMis();
     if(name==='v-chat') this.renderChat();
   },
+  // Deja que el vendedor escoja de qué evento quiere vender tickets antes
+  // de mostrar el formulario de venta.
+  async renderEventoPicker(){
+    const box = document.getElementById('v-vender');
+    box.innerHTML = `<div class="hint" style="padding:20px;">Cargando eventos…</div>`;
+    const {data} = await sb.from('eventos').select('*').eq('estado','activo').order('created_at',{ascending:false});
+    const eventos = data || [];
+    this._eventosCache = eventos;
+    if(!eventos.length){ box.innerHTML = `<div class="card"><p class="hint">No hay eventos activos disponibles.</p></div>`; return; }
+    box.innerHTML = `
+      <div class="card" style="max-width:760px; margin:0 auto;">
+        <div class="section-title"><h2 style="font-size:19px;">¿De qué evento quieres vender tickets?</h2></div>
+        <div class="evt-picker-grid">
+          ${eventos.map(e=>`
+            <div class="evt-picker-card" onclick="VTApp.elegirEvento('${e.id}')">
+              ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
+              <div class="evt-picker-body"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span></div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  },
+  elegirEvento(id){
+    const evento = (this._eventosCache||[]).find(e=>e.id===id);
+    if(!evento) return;
+    this.evento = evento;
+    renderEventPill(evento);
+    this.renderVender();
+  },
+  cambiarEvento(){
+    this.evento = null;
+    renderEventPill(null);
+    this.renderVender();
+  },
   async renderVender(){
     const box = document.getElementById('v-vender');
-    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">No hay un evento activo en este momento.</p></div>`; return; }
+    if(!this.evento){ this.renderEventoPicker(); return; }
     const disponibles = this.identity.ilimitado ? '∞' : Math.max(0, (this.identity.limite||0) - (this.identity.asignados||0));
     box.innerHTML = `
       <div class="card" style="max-width:640px;">
+        <span class="back" onclick="VTApp.cambiarEvento()">‹ cambiar evento</span>
         <div class="section-title"><h2 style="font-size:19px;">Vender tickets — ${escapeHtml(this.evento.nombre)}</h2></div>
         <p class="hint" style="margin-bottom:14px;">Disponibles para ti: <b>${disponibles}</b></p>
         <div class="grid-2">
