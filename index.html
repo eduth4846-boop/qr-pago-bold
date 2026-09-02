@@ -520,6 +520,63 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 ::-webkit-scrollbar{width:8px; height:8px;}
 ::-webkit-scrollbar-thumb{background:linear-gradient(var(--pink),var(--violet)); border-radius:8px;}
 
+/* ---------- HUD Loader (overlay de carga global) ---------- */
+#hud-loader-overlay{
+  --hud-cyan-light:#9ff2ff;
+  position:fixed; inset:0; z-index:9999;
+  background:rgba(8,5,15,.92);
+  backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; pointer-events:none; transition:opacity .3s ease;
+}
+#hud-loader-overlay.active{ opacity:1; pointer-events:all; }
+.hud-wrap{display:flex; flex-direction:column; align-items:center; gap:18px;}
+.hud-ring-container{position:relative; width:190px; height:190px;}
+.hud-ring-container svg{position:absolute; inset:0; width:100%; height:100%;}
+.ring-outer{animation:hud-spin 6s linear infinite; filter:drop-shadow(0 0 6px rgba(0,240,255,.5));}
+.ring-mid{animation:hud-spin-rev 4s linear infinite;}
+.ring-inner{animation:hud-spin 2.4s linear infinite;}
+.ring-tickmarks{animation:hud-spin-rev 8s linear infinite; opacity:.6;}
+@keyframes hud-spin{from{transform:rotate(0deg);} to{transform:rotate(360deg);}}
+@keyframes hud-spin-rev{from{transform:rotate(360deg);} to{transform:rotate(0deg);}}
+.hud-core{
+  position:absolute; top:50%; left:50%; width:20px; height:20px; transform:translate(-50%,-50%);
+  border-radius:50%;
+  background:radial-gradient(circle, #ffffff 0%, var(--hud-cyan-light) 30%, var(--cyan) 70%);
+  box-shadow:0 0 20px 8px rgba(0,240,255,.8), 0 0 60px 20px rgba(0,240,255,.35);
+  animation:hud-pulse 1.4s ease-in-out infinite;
+}
+@keyframes hud-pulse{0%,100%{transform:translate(-50%,-50%) scale(1); opacity:1;} 50%{transform:translate(-50%,-50%) scale(1.4); opacity:.7;}}
+.hud-scanline{
+  position:absolute; top:50%; left:0; width:100%; height:1px;
+  background:linear-gradient(90deg, transparent, rgba(0,240,255,.7), transparent);
+  transform:translateY(-50%); opacity:.5;
+}
+.hud-text{color:var(--cyan); letter-spacing:5px; font-weight:700; font-size:15px; text-shadow:0 0 6px rgba(0,240,255,.5); font-family:'Rajdhani',sans-serif;}
+.hud-text .hd{display:inline-block; animation:hud-blink 1.4s infinite;}
+@keyframes hud-blink{0%,100%{opacity:1;} 50%{opacity:.3;}}
+.hud-bar-outer{
+  width:230px; height:15px; background:var(--panel); border:1px solid var(--cyan);
+  box-shadow:0 0 10px rgba(0,240,255,.5), inset 0 0 8px rgba(0,240,255,.2);
+  clip-path:polygon(2% 0, 98% 0, 100% 50%, 98% 100%, 2% 100%, 0 50%);
+  overflow:hidden; position:relative;
+}
+.hud-bar-inner{
+  height:100%; width:0%;
+  background:linear-gradient(90deg, var(--cyan), var(--hud-cyan-light));
+  box-shadow:0 0 10px rgba(0,240,255,.9); transition:width .2s ease-out; position:relative;
+}
+.hud-bar-inner::after{
+  content:""; position:absolute; top:0; right:0; width:24px; height:100%;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.9));
+}
+.hud-percent{color:var(--cyan); font-size:16px; font-weight:700; letter-spacing:2px; text-shadow:0 0 6px rgba(0,240,255,.5); font-family:'Space Mono',monospace;}
+.hud-circuit{position:absolute; inset:0; pointer-events:none; opacity:.35;}
+@media(max-width:600px){
+  .hud-ring-container{width:150px; height:150px;}
+  .hud-bar-outer{width:190px;}
+}
+
 /* ---------- configuración de íconos (panel oculto, sin botón visible) ---------- */
 .icon-cfg-row{display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); flex-wrap:wrap;}
 .icon-cfg-row:last-child{border-bottom:none;}
@@ -543,6 +600,59 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 </div>
 <div id="cursor-glow"></div>
 <div class="toast-wrap" id="toastWrap"></div>
+
+<!-- ============ HUD LOADER (overlay de carga global) ============ -->
+<div id="hud-loader-overlay">
+  <div class="hud-wrap">
+    <div class="hud-ring-container">
+      <svg class="hud-circuit" viewBox="0 0 190 190">
+        <g stroke="#00f0ff" stroke-width="1" fill="none" opacity="0.5">
+          <path d="M0 95 H51 M139 95 H190"/>
+          <path d="M95 0 V51 M95 139 V190"/>
+          <circle cx="51" cy="95" r="2.5" fill="#00f0ff"/>
+          <circle cx="139" cy="95" r="2.5" fill="#00f0ff"/>
+        </g>
+      </svg>
+
+      <svg class="ring-outer" viewBox="0 0 190 190">
+        <defs>
+          <linearGradient id="hudGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#0a3a4a"/>
+            <stop offset="50%" stop-color="#00f0ff"/>
+            <stop offset="100%" stop-color="#9ff2ff"/>
+          </linearGradient>
+        </defs>
+        <circle cx="95" cy="95" r="85" fill="none" stroke="url(#hudGrad)" stroke-width="8"
+                stroke-dasharray="13 5 3 5" stroke-linecap="round"/>
+      </svg>
+
+      <svg class="ring-tickmarks" viewBox="0 0 190 190">
+        <circle cx="95" cy="95" r="72" fill="none" stroke="#00f0ff" stroke-width="2"
+                stroke-dasharray="2 7" opacity="0.7"/>
+      </svg>
+
+      <svg class="ring-mid" viewBox="0 0 190 190">
+        <circle cx="95" cy="95" r="58" fill="none" stroke="#00f0ff" stroke-width="5"
+                stroke-dasharray="8 3" stroke-linecap="round" opacity="0.85"/>
+      </svg>
+
+      <svg class="ring-inner" viewBox="0 0 190 190">
+        <circle cx="95" cy="95" r="40" fill="none" stroke="#9ff2ff" stroke-width="2.5"
+                stroke-dasharray="5 4" stroke-linecap="round"/>
+      </svg>
+
+      <div class="hud-scanline"></div>
+      <div class="hud-core"></div>
+    </div>
+
+    <div class="hud-text">CARGANDO<span class="hd">...</span></div>
+
+    <div class="hud-bar-outer">
+      <div class="hud-bar-inner" id="hudBarInner"></div>
+    </div>
+    <div class="hud-percent" id="hudPercentText">0%</div>
+  </div>
+</div>
 
 <div id="app">
   <div class="topbar" id="topbar">
@@ -722,6 +832,107 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 
 <script>
 /* =========================================================
+   HUD LOADER — overlay de carga global
+   Se muestra automáticamente mientras la app espera una
+   respuesta de red (Supabase, fetch directo, Edge Functions,
+   carga de librerías bajo demanda, etc.)
+========================================================= */
+const HudLoader = (() => {
+  const overlay = document.getElementById('hud-loader-overlay');
+  const bar = document.getElementById('hudBarInner');
+  const percentText = document.getElementById('hudPercentText');
+
+  let current = 0;
+  let target = 0;
+  let indeterminate = false;
+  let rafId = null;
+
+  function render(){
+    if(indeterminate && current < 90){
+      target = Math.min(90, current + 0.6);
+    }
+    current += (target - current) * 0.15;
+    bar.style.width = current + '%';
+    percentText.textContent = Math.round(current) + '%';
+    rafId = requestAnimationFrame(render);
+  }
+
+  return {
+    show(){
+      current = 0;
+      target = 0;
+      indeterminate = true;
+      overlay.classList.add('active');
+      if(!rafId) render();
+    },
+    setProgress(pct){
+      indeterminate = false;
+      target = Math.max(0, Math.min(100, pct));
+    },
+    hide(){
+      target = 100;
+      indeterminate = false;
+      setTimeout(() => {
+        overlay.classList.remove('active');
+        if(rafId){ cancelAnimationFrame(rafId); rafId = null; }
+      }, 350);
+    }
+  };
+})();
+
+/* Contador global de operaciones "en espera" (peticiones a Supabase,
+   fetch directo a Edge Functions, carga de librerías bajo demanda, etc.).
+   Muestra el HUD automáticamente mientras haya al menos una en curso,
+   con un pequeño retardo para no parpadear en respuestas instantáneas
+   y un tiempo mínimo visible para que no se sienta como un parpadeo. */
+const NetworkActivity = (() => {
+  let pending = 0;
+  let showTimer = null;
+  let visible = false;
+  let shownAt = 0;
+  const SHOW_DELAY = 150;
+  const MIN_VISIBLE = 400;
+
+  function begin(){
+    pending++;
+    if(pending === 1 && !showTimer){
+      showTimer = setTimeout(() => {
+        showTimer = null;
+        if(pending > 0){
+          visible = true;
+          shownAt = Date.now();
+          HudLoader.show();
+        }
+      }, SHOW_DELAY);
+    }
+  }
+  function end(){
+    pending = Math.max(0, pending - 1);
+    if(pending === 0){
+      if(showTimer){ clearTimeout(showTimer); showTimer = null; }
+      if(visible){
+        const wait = Math.max(0, MIN_VISIBLE - (Date.now() - shownAt));
+        setTimeout(() => {
+          if(pending === 0){ HudLoader.hide(); visible = false; }
+        }, wait);
+      }
+    }
+  }
+  return { begin, end };
+})();
+
+// Envuelve automáticamente fetch() (usado internamente por el cliente de
+// Supabase y por las llamadas a Edge Functions) para mostrar/ocultar el
+// HUD sin tener que tocar cada función de la app individualmente.
+(function(){
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function(...args){
+    NetworkActivity.begin();
+    return _fetch(...args).finally(() => NetworkActivity.end());
+  };
+})();
+
+/* =========================================================
    CONFIG
 ========================================================= */
 const SUPA_URL = 'https://ukmmrbjmeumjkxdblmgc.supabase.co';
@@ -737,11 +948,12 @@ const EDGE_FUNCTIONS_URL = SUPA_URL + '/functions/v1';
 const _libPromises = {};
 function loadScriptOnce(src){
   if(_libPromises[src]) return _libPromises[src];
+  NetworkActivity.begin();
   _libPromises[src] = new Promise((resolve, reject)=>{
     const s = document.createElement('script');
     s.src = src;
-    s.onload = ()=>resolve();
-    s.onerror = ()=>{ delete _libPromises[src]; reject(new Error('No se pudo cargar '+src)); };
+    s.onload = ()=>{ NetworkActivity.end(); resolve(); };
+    s.onerror = ()=>{ NetworkActivity.end(); delete _libPromises[src]; reject(new Error('No se pudo cargar '+src)); };
     document.head.appendChild(s);
   });
   return _libPromises[src];
@@ -830,6 +1042,14 @@ function waPhone(tel){
 }
 // Genera una imagen PNG con el detalle de una o varias entradas (para enviar por WhatsApp)
 async function generarImagenEntradas(evento, tickets){
+  NetworkActivity.begin();
+  try{
+  return await _generarImagenEntradas(evento, tickets);
+  } finally {
+    NetworkActivity.end();
+  }
+}
+async function _generarImagenEntradas(evento, tickets){
   await loadQRCodeLib();
   const W = 640, PAD = 24, CARD_H = 250, GAP = 18;
   const H = PAD*2 + tickets.length*(CARD_H+GAP) - GAP + 70;
