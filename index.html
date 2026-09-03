@@ -10,9 +10,9 @@
 <link rel="preconnect" href="https://ukmmrbjmeumjkxdblmgc.supabase.co">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-<!-- qrcodejs, html5-qrcode y xlsx ya NO se cargan aquí: se cargan bajo demanda (ver loadScriptOnce) solo cuando
-     el usuario realmente entra a la pantalla que los necesita (ver tickets, escanear QR, importar Excel).
-     Esto evita descargar y parsear ~250KB de JS que la mayoría de sesiones nunca usa. -->
+<!-- qrcodejs y html5-qrcode ya NO se cargan aquí: se cargan bajo demanda (ver loadScriptOnce) solo cuando
+     el usuario realmente entra a la pantalla que los necesita (ver tickets, escanear QR).
+     Esto evita descargar y parsear JS que la mayoría de sesiones nunca usa. -->
 <style>
 /* =========================================================
    CASHLESS COLOMBIA — design tokens NEÓN
@@ -787,7 +787,6 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div class="tabs">
         <div class="pill-tab active" data-tab="a-eventos" onclick="AdminApp.tab('a-eventos')">Eventos</div>
         <div class="pill-tab" data-tab="a-venta" onclick="AdminApp.tab('a-venta')">Venta individual</div>
-        <div class="pill-tab" data-tab="a-masiva" onclick="AdminApp.tab('a-masiva')">Carga masiva</div>
         <div class="pill-tab" data-tab="a-tickets" onclick="AdminApp.tab('a-tickets')">Tickets</div>
         <div class="pill-tab" data-tab="a-usuarios" onclick="AdminApp.tab('a-usuarios')">Usuarios QR/VT</div>
         <div class="pill-tab" data-tab="a-stats" onclick="AdminApp.tab('a-stats')">Estadísticas</div>
@@ -797,7 +796,6 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       </div>
       <div id="a-eventos" class="tab-pane"></div>
       <div id="a-venta" class="tab-pane hide"></div>
-      <div id="a-masiva" class="tab-pane hide"></div>
       <div id="a-tickets" class="tab-pane hide"></div>
       <div id="a-usuarios" class="tab-pane hide"></div>
       <div id="a-stats" class="tab-pane hide"></div>
@@ -962,7 +960,6 @@ function loadScriptOnce(src){
 }
 const loadQRCodeLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js');
 const loadHtml5QrcodeLib = ()=>loadScriptOnce('https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js');
-const loadXlsxLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
 
 // Id de orden Bold persistido durante el checkout para soportar la redirección.
 function saveBoldOrder(orderId, solicitudId){
@@ -1387,6 +1384,10 @@ const Seats = {
     for(let g=1;g<=mapa.general;g++){
       rows.push({evento_id:evento.id, zona:'general', numero:`G${g}`});
     }
+    (mapa.categorias||[]).forEach(c=>{
+      const prefix = (c.id||'CAT').toUpperCase();
+      for(let n=1;n<=(c.cantidad||0);n++){ rows.push({evento_id:evento.id, zona:c.id, numero:`${prefix}-${n}`}); }
+    });
     if(rows.length) await sb.from('asientos').insert(rows);
   },
   // Agrega asientos nuevos (palcos y/o VIP) sin tocar los ya existentes,
@@ -1410,6 +1411,11 @@ const Seats = {
     for(let g=generalExistentes+1; g<=(mapa.general||0); g++){
       rows.push({evento_id:evento.id, zona:'general', numero:`G${g}`});
     }
+    (mapa.categorias||[]).forEach(c=>{
+      const existentesCat = existentes.filter(a=>a.zona===c.id).length;
+      const prefix = (c.id||'CAT').toUpperCase();
+      for(let n=existentesCat+1; n<=(c.cantidad||0); n++){ rows.push({evento_id:evento.id, zona:c.id, numero:`${prefix}-${n}`}); }
+    });
     if(rows.length) await sb.from('asientos').insert(rows);
   },
   async free(eventoId, zona, palco){
@@ -1448,31 +1454,60 @@ const Seats = {
 };
 
 /* =========================================================
-   SERVICIO — cargo adicional configurable por evento que se
-   suma al precio de las boletas (carga masiva, lote sin datos,
-   venta individual, venta del vendedor VT y compra online).
-   Se guarda en evento.mapa.servicio = {activo, tipo, valor}
-   tipo: 'por_ticket' (se suma el mismo valor a cada boleta) o
-         'total' (el valor se reparte entre todas las boletas
-         de esa misma operación de venta/compra).
+   CATEGORÍA / SERVICIO — cada categoría numerada (Palco, VIP o
+   una categoría personalizada creada por el admin) puede tener
+   su propio servicio con NOMBRE y VALOR propios, que se suma a
+   cada silla numerada de esa categoría. "General" (o cualquier
+   categoría personalizada NO numerada) nunca lleva servicio.
+   Se guarda en evento.mapa:
+     servicios: { palco:{activo,nombre,valor}, vip:{activo,nombre,valor} }
+     categorias: [{id, nombre, precio, numerada, cantidad, servicio:{activo,nombre,valor}}]
 ========================================================= */
-const Servicio = {
-  get(evento){
-    const s = (evento && evento.mapa && evento.mapa.servicio) || {};
-    return {activo: !!s.activo, tipo: s.tipo==='total' ? 'total' : 'por_ticket', valor: Number(s.valor)||0};
+const CategoriaServicio = {
+  // Lista todas las categorías vendibles del evento: las 3 fijas + las personalizadas.
+  list(evento){
+    const mapa = (evento && evento.mapa) || {};
+    const cats = [
+      {key:'palco', nombre:'Palco', numerada:true, built_in:true},
+      {key:'vip', nombre:'VIP', numerada:true, built_in:true},
+      {key:'general', nombre:'General', numerada:false, built_in:true}
+    ];
+    (mapa.categorias||[]).forEach(c=> cats.push({key:c.id, nombre:c.nombre, numerada:!!c.numerada, built_in:false}));
+    return cats;
   },
-  // Cargo de servicio para UN ticket dentro de una operación de "cantidad" boletas.
-  porTicket(evento, cantidad){
-    const cfg = this.get(evento);
-    if(!cfg.activo || cfg.valor<=0) return 0;
-    if(cfg.tipo==='total') return cantidad>0 ? cfg.valor/cantidad : 0;
-    return cfg.valor;
+  find(evento, key){ return this.list(evento).find(c=>c.key===key); },
+  // Precio base configurado para la categoría (silla o cupo, sin servicio).
+  precioBase(evento, key){
+    const mapa = (evento && evento.mapa) || {};
+    if(key==='palco') return Number(mapa.precios && mapa.precios.palco)||0;
+    if(key==='vip') return Number(mapa.precios && mapa.precios.vip)||0;
+    if(key==='general') return Number(mapa.precios && mapa.precios.general)||0;
+    const cat = (mapa.categorias||[]).find(c=>c.id===key);
+    return cat ? (Number(cat.precio)||0) : 0;
   },
-  // Cargo total de servicio para "cantidad" boletas de una misma operación.
-  total(evento, cantidad){
-    const cfg = this.get(evento);
-    if(!cfg.activo || cfg.valor<=0 || !cantidad || cantidad<=0) return 0;
-    return cfg.tipo==='total' ? cfg.valor : cfg.valor*cantidad;
+  esNumerada(evento, key){
+    if(key==='palco'||key==='vip') return true;
+    if(key==='general') return false;
+    const cat = (evento && evento.mapa && evento.mapa.categorias||[]).find(c=>c.id===key);
+    return cat ? !!cat.numerada : false;
+  },
+  // Config de servicio {activo, nombre, valor} de la categoría. Nunca activo si no es numerada.
+  servicio(evento, key){
+    const mapa = (evento && evento.mapa) || {};
+    if(!this.esNumerada(evento, key)) return {activo:false, nombre:'', valor:0};
+    if(key==='palco') return {activo:false, nombre:'', valor:0, ...((mapa.servicios&&mapa.servicios.palco)||{})};
+    if(key==='vip') return {activo:false, nombre:'', valor:0, ...((mapa.servicios&&mapa.servicios.vip)||{})};
+    const cat = (mapa.categorias||[]).find(c=>c.id===key);
+    return (cat && cat.servicio) ? {activo:false,nombre:'',valor:0,...cat.servicio} : {activo:false, nombre:'', valor:0};
+  },
+  // Valor de servicio que se suma a CADA silla numerada de esa categoría (0 si no aplica).
+  valorServicio(evento, key){
+    const s = this.servicio(evento, key);
+    return (s.activo && Number(s.valor)>0) ? Number(s.valor) : 0;
+  },
+  nombreServicio(evento, key){
+    const s = this.servicio(evento, key);
+    return s.nombre || 'Servicio';
   }
 };
 
@@ -1567,6 +1602,24 @@ const MapView = {
       key:'GENERAL', label:`GENERAL (${generalTaken}/${generalTotal})`, cols:12, rows:Math.max(1,Math.ceil(generalSeats.length/12)),
       seats:generalSeats, kind:'general', empty: generalTotal===0
     });
+    // Categorías personalizadas: numeradas se dibujan como grilla individual (tipo VIP);
+    // no numeradas como zona agrupada (tipo General).
+    const categoriasPersonalizadas = mapa.categorias || [];
+    const customZoneKeys = [];
+    categoriasPersonalizadas.forEach(c=>{
+      const seatsCat = asientos.filter(a=>a.zona===c.id);
+      const taken = seatsCat.filter(a=>a.ocupado).length;
+      const total = seatsCat.length;
+      const zkey = 'CAT_'+c.id;
+      customZoneKeys.push(zkey);
+      if(c.numerada){
+        const sorted = seatsCat.slice().sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
+        zones.push({key:zkey, label:`${(c.nombre||'CATEGORÍA').toUpperCase()} (${taken}/${total})`, cols:10, rows:Math.max(1,Math.ceil(total/10)), seats:sorted, kind:'custom', customLabel:c.nombre, empty: total===0});
+      } else {
+        const pooled = seatsCat.slice(0, Math.min(total,120));
+        zones.push({key:zkey, label:`${(c.nombre||'CATEGORÍA').toUpperCase()} (${taken}/${total})`, cols:12, rows:Math.max(1,Math.ceil(pooled.length/12)), seats:pooled, kind:'custom', customLabel:c.nombre, empty: total===0});
+      }
+    });
 
     // ---- sizes & default packed positions ----
     const stageW = 220, stageH = 32;
@@ -1579,8 +1632,9 @@ const MapView = {
     const packed = this.packDefault(palcoBoxes, stagePos.y + stageH + 10, canvasW);
     let cursorY = packed.bottom;
     const defaultPos = {...packed.pos};
-    ['VIP','GENERAL'].forEach(k=>{
+    ['VIP','GENERAL', ...customZoneKeys].forEach(k=>{
       const z = zones.find(zz=>zz.key===k);
+      if(!z) return;
       defaultPos[k] = {x:6, y:cursorY};
       cursorY += z.h + 8;
     });
@@ -1599,7 +1653,8 @@ const MapView = {
         inner = `<div class="hint" style="grid-column:1/-1; font-size:10px; padding:2px 4px;">Sin puestos</div>`;
       } else {
         inner = z.seats.map(s=>{
-          const info = z.kind==='palco' ? `${z.label} · Silla ${s.numero.split('-')[1]||s.numero}` : `${z.kind==='vip'?'VIP':'General'} · ${s.numero}`;
+          const zoneName = z.kind==='vip'?'VIP':(z.kind==='general'?'General':(z.kind==='custom'?z.customLabel:z.label));
+          const info = z.kind==='palco' ? `${z.label} · Silla ${s.numero.split('-')[1]||s.numero}` : `${zoneName} · ${s.numero}`;
           return seatEl(s, info);
         }).join('');
       }
@@ -2019,7 +2074,10 @@ const UsuarioApp = {
   seatLabel(a){
     if(a.zona==='palco') return `Palco ${a.numero.split('-')[0].replace('P','')} · Silla ${a.numero.split('-')[1]||''}`;
     if(a.zona==='vip') return `VIP · ${a.numero}`;
-    return `General · ${a.numero}`;
+    if(a.zona==='general') return `General · ${a.numero}`;
+    const evento = this.compra.evento;
+    const cat = evento && evento.mapa && (evento.mapa.categorias||[]).find(c=>c.id===a.zona);
+    return cat ? `${cat.nombre} · ${a.numero}` : `${a.zona} · ${a.numero}`;
   },
   async renderSeleccionUI(){
     const box = document.getElementById('u-comprar');
@@ -2031,14 +2089,12 @@ const UsuarioApp = {
     const asientos = (await Seats.all(evento.id)).filter(a=>!a.ocupado);
     this.compra.asientos = asientos;
     this.compra.seleccion = {};
-    const precios = (evento.mapa && evento.mapa.precios) || {palco:0, vip:0, general:0};
-    const servicio = Servicio.get(evento);
-    this.compra.servicio = servicio;
+    const hayServicio = CategoriaServicio.list(evento).some(c=>CategoriaServicio.valorServicio(evento,c.key)>0);
     box.innerHTML = `
       <div class="card" style="margin-bottom:14px;">
         <div class="section-title"><h2 style="font-size:19px;">${escapeHtml(evento.nombre)}</h2></div>
         <p class="hint">Hola ${escapeHtml(this.compra.comprador.nombre)}, elige una o varias ubicaciones disponibles. Solo verás la ubicación y el valor a pagar.</p>
-        ${servicio.activo ? `<p class="hint">Incluye un valor de servicio de ${servicio.tipo==='por_ticket'?money(servicio.valor)+' por cada ticket':money(servicio.valor)+' repartido entre los tickets de tu compra'}.</p>` : ''}
+        ${hayServicio ? `<p class="hint">Algunas ubicaciones incluyen un valor de servicio adicional, indicado junto a cada una.</p>` : ''}
       </div>
       <div class="grid-2">
         <div class="card">
@@ -2059,19 +2115,22 @@ const UsuarioApp = {
       </div>
       <div class="card" id="cmpMisSolicitudes" style="margin-top:16px;"></div>`;
     MapView.render(document.getElementById('cmpMapa'), evento.id, null, {editable:false});
-    this.renderListaAsientos(asientos, precios, servicio);
+    this.renderListaAsientos(asientos);
     this.cargarMisSolicitudes();
   },
-  renderListaAsientos(asientos, precios, servicio){
-    servicio = servicio || this.compra.servicio || Servicio.get(this.compra.evento);
+  renderListaAsientos(asientos){
+    const evento = this.compra.evento;
     const list = document.getElementById('cmpLista');
     if(!asientos.length){ list.innerHTML = '<p class="hint">No hay ubicaciones disponibles en este momento.</p>'; return; }
     list.innerHTML = asientos.map(a=>{
-      const precio = a.zona==='palco' ? (precios.palco||0) : a.zona==='vip' ? (precios.vip||0) : (precios.general||0);
-      const precioMostrado = precio + (servicio.activo && servicio.tipo==='por_ticket' ? servicio.valor : 0);
+      const precioBase = CategoriaServicio.precioBase(evento, a.zona);
+      const servicioValor = CategoriaServicio.valorServicio(evento, a.zona);
+      const precioMostrado = precioBase + servicioValor;
+      const cat = CategoriaServicio.find(evento, a.zona);
+      const nombreZona = a.zona==='palco'?'Palco':(a.zona==='vip'?'Zona VIP':(a.zona==='general'?'Zona general':(cat?cat.nombre:a.zona)));
       return `<label class="buy-item" id="bi-${a.id}">
-        <input type="checkbox" onchange="UsuarioApp.toggleSeat('${a.id}', ${precio})">
-        <div class="bi-info"><b>${escapeHtml(this.seatLabel(a))}</b><span>${a.zona==='palco'?'Palco':(a.zona==='vip'?'Zona VIP':'Zona general')}${servicio.activo && servicio.tipo==='por_ticket' ? ' · incluye servicio' : ''}</span></div>
+        <input type="checkbox" onchange="UsuarioApp.toggleSeat('${a.id}', ${precioBase})">
+        <div class="bi-info"><b>${escapeHtml(this.seatLabel(a))}</b><span>${escapeHtml(nombreZona)}${servicioValor>0 ? ' · incluye '+escapeHtml(CategoriaServicio.nombreServicio(evento,a.zona)) : ''}</span></div>
         <div class="bi-price">${money(precioMostrado)}</div>
       </label>`;
     }).join('');
@@ -2098,13 +2157,13 @@ const UsuarioApp = {
   actualizarTotalesCompra(){
     const items = Object.values(this.compra.seleccion);
     const cantidad = items.length;
-    const servicio = this.compra.servicio || Servicio.get(this.compra.evento);
+    const evento = this.compra.evento;
     const totalBase = items.reduce((a,x)=>a+x.precio,0);
-    const servicioTotal = Servicio.total(this.compra.evento, cantidad);
+    const servicioTotal = items.reduce((a,x)=> a + CategoriaServicio.valorServicio(evento, x.asiento.zona), 0);
     const total = totalBase + servicioTotal;
     document.getElementById('cmpCant').textContent = cantidad;
     const servWrap = document.getElementById('cmpServicioWrap');
-    if(servWrap) servWrap.classList.toggle('hide', !(servicio.activo && servicioTotal>0));
+    if(servWrap) servWrap.classList.toggle('hide', servicioTotal<=0);
     const servEl = document.getElementById('cmpServicio');
     if(servEl) servEl.textContent = money(servicioTotal);
     document.getElementById('cmpTotal').textContent = money(total);
@@ -2112,12 +2171,11 @@ const UsuarioApp = {
     return {items, cantidad, totalBase, servicioTotal, total};
   },
   abrirPago(){
-    const {items, cantidad, servicioTotal, total} = this.actualizarTotalesCompra();
+    const {items, servicioTotal, total} = this.actualizarTotalesCompra();
     if(!items.length) return;
     const pago_qr = this.compra.evento.mapa && this.compra.evento.mapa.pago_qr;
     const pago_link = this.compra.evento.mapa && this.compra.evento.mapa.pago_link;
-    const servicioPorTicket = Servicio.porTicket(this.compra.evento, cantidad);
-    const resumen = items.map(x=>`${escapeHtml(this.seatLabel(x.asiento))} — ${money(x.precio + servicioPorTicket)}`).join('<br>');
+    const resumen = items.map(x=>`${escapeHtml(this.seatLabel(x.asiento))} — ${money(x.precio + CategoriaServicio.valorServicio(this.compra.evento, x.asiento.zona))}`).join('<br>');
     const servicioLinea = servicioTotal>0 ? `<div class="hint" style="margin-bottom:10px;">Incluye servicio: ${money(servicioTotal)}</div>` : '';
     document.body.insertAdjacentHTML('beforeend', `
       <div class="modal-bg" id="pagoModal">
@@ -2146,11 +2204,9 @@ const UsuarioApp = {
     const btn = document.getElementById('boldPagarBtn');
     if(btn){ btn.disabled = true; btn.textContent = 'Preparando pago...'; }
     try{
-      const cantidad = Object.keys(this.compra.seleccion).length;
-      const servicioPorTicket = Servicio.porTicket(this.compra.evento, cantidad);
       const items = Object.values(this.compra.seleccion).map(x=>({
         asiento_id: x.asiento.id, zona: x.asiento.zona, categoria: x.asiento.zona,
-        ubicacion_detalle: this.seatLabel(x.asiento), precio: x.precio + servicioPorTicket
+        ubicacion_detalle: this.seatLabel(x.asiento), precio: x.precio + CategoriaServicio.valorServicio(this.compra.evento, x.asiento.zona)
       }));
       const res = await fetch(EDGE_FUNCTIONS_URL + '/bold-crear-orden', {
         method: 'POST',
@@ -2234,11 +2290,9 @@ const UsuarioApp = {
     try{
       const carpeta = 'compras/' + this.compra.comprador.correo.replace(/[^a-zA-Z0-9]+/g,'_');
       const comprobante_url = await uploadToComprobantes(file, carpeta);
-      const cantidad = Object.keys(this.compra.seleccion).length;
-      const servicioPorTicket = Servicio.porTicket(this.compra.evento, cantidad);
       const items = Object.values(this.compra.seleccion).map(x=>({
         asiento_id: x.asiento.id, zona: x.asiento.zona, categoria: x.asiento.zona,
-        ubicacion_detalle: this.seatLabel(x.asiento), precio: x.precio + servicioPorTicket
+        ubicacion_detalle: this.seatLabel(x.asiento), precio: x.precio + CategoriaServicio.valorServicio(this.compra.evento, x.asiento.zona)
       }));
       await Promise.all(items.map(it=> sb.from('asientos').update({ocupado:true}).eq('id', it.asiento_id)));
       const {data, error} = await sb.from('solicitudes_compra').insert({
@@ -2341,7 +2395,6 @@ const AdminApp = {
     document.getElementById(name).classList.remove('hide');
     if(name==='a-eventos') this.renderEventos();
     if(name==='a-venta') this.renderVenta();
-    if(name==='a-masiva') this.renderMasiva();
     if(name==='a-tickets') this.renderTickets();
     if(name==='a-usuarios') this.renderUsuarios();
     if(name==='a-stats') this.renderStats();
@@ -2400,6 +2453,11 @@ const AdminApp = {
             <div class="field" style="flex:1;"><label>Precio General</label><input id="evPrecioGeneral" type="number" min="0" placeholder="0"></div>
           </div>
           <p class="hint">Estos precios se muestran en la pestaña "Comprar tickets" del usuario. Puedes ajustarlos luego con el botón "Config. de pago".</p>
+          <button class="btn" type="button" style="margin-bottom:10px;" onclick="AdminApp.toggleCategoriasPanel('nuevo')">🏷️ Categorías y servicio por silla</button>
+          <div id="catPanel-nuevo" class="hide" style="margin-bottom:14px; border:1px solid var(--line); border-radius:12px; padding:12px;">
+            <p class="hint">Define aquí el servicio (nombre + valor) que se suma a cada silla numerada de Palco o VIP, y crea categorías/localidades propias (numeradas o generales). Solo las categorías numeradas pueden llevar servicio.</p>
+            <div id="catPanelBody-nuevo"></div>
+          </div>
           <button class="btn btn-primary btn-block" onclick="AdminApp.crearEvento()">Crear evento</button>
           <div style="margin-top:18px; border-top:1px solid var(--line); padding-top:16px;">
             <button class="btn btn-danger btn-block" onclick="AdminApp.resetAll()">⚠ Eliminar TODOS los registros</button>
@@ -2444,12 +2502,206 @@ const AdminApp = {
           </div>
           <button class="btn btn-primary btn-sm btn-block" onclick="AdminApp.guardarMapa('${e.id}')">Guardar y actualizar mapa</button>
           <p class="hint">Solo se agregan palcos/puestos/cupos nuevos; los existentes y sus ocupantes no se modifican. Deja una zona en "0 / ninguno" para que no aparezca como ubicación disponible.</p>
+          <div style="margin-top:14px; border-top:1px dashed var(--line); padding-top:10px;">
+            <button class="btn btn-sm" type="button" onclick="AdminApp.toggleCategoriasPanel('${e.id}')">🏷️ Categorías y servicio por silla</button>
+            <div id="catPanel-${e.id}" class="hide" style="margin-top:10px; border:1px solid var(--line); border-radius:12px; padding:12px;">
+              <p class="hint">Servicio (nombre + valor) por cada silla numerada de Palco/VIP, categorías personalizadas y su cantidad de sillas/cupos (solo se puede aumentar).</p>
+              <div id="catPanelBody-${e.id}"></div>
+            </div>
+          </div>
         </div>
       </div>`).join('');
   },
   openAjustarMapa(id){
     const box = document.getElementById('mapaEdit-'+id);
     if(box) box.classList.toggle('hide');
+  },
+  /* ---------- CATEGORÍAS Y SERVICIO POR SILLA ---------- */
+  // Estado en memoria (por "key": el id del evento, o 'nuevo' para el formulario
+  // de creación) mientras el admin edita el servicio de Palco/VIP y sus categorías
+  // personalizadas, antes de guardar en evento.mapa.
+  _catState: {},
+  catBuildState(mapa){
+    mapa = mapa || {};
+    const servicios = mapa.servicios || {};
+    return {
+      palco: {activo: !!(servicios.palco&&servicios.palco.activo), nombre:(servicios.palco&&servicios.palco.nombre)||'', valor:Number(servicios.palco&&servicios.palco.valor)||0},
+      vip: {activo: !!(servicios.vip&&servicios.vip.activo), nombre:(servicios.vip&&servicios.vip.nombre)||'', valor:Number(servicios.vip&&servicios.vip.valor)||0},
+      categorias: (mapa.categorias||[]).map(c=>({
+        id:c.id, nombre:c.nombre, precio:Number(c.precio)||0, numerada:!!c.numerada, cantidad:Number(c.cantidad)||0,
+        servicio:{activo:!!(c.servicio&&c.servicio.activo), nombre:(c.servicio&&c.servicio.nombre)||'', valor:Number(c.servicio&&c.servicio.valor)||0},
+        _persisted:true, _cantidadOriginal:Number(c.cantidad)||0
+      })),
+      draft: {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0}
+    };
+  },
+  toggleCategoriasPanel(key){
+    const wrap = document.getElementById('catPanel-'+key);
+    if(!wrap) return;
+    const opening = wrap.classList.contains('hide');
+    if(opening){
+      if(!this._catState[key]){
+        let mapa = null;
+        if(key!=='nuevo'){ const ev = this.eventos.find(e=>e.id===key); mapa = ev && ev.mapa; }
+        this._catState[key] = this.catBuildState(mapa);
+      }
+      this.catRender(key);
+    }
+    wrap.classList.toggle('hide');
+  },
+  // Lee del DOM los valores actuales de los campos del panel hacia el estado en
+  // memoria, para no perder lo que el admin ya escribió antes de re-renderizar.
+  catSync(key){
+    const st = this._catState[key]; if(!st) return;
+    const g = id=>document.getElementById(id);
+    const pfx = 'cat-'+key+'-';
+    if(g(pfx+'palcoActivo')){
+      st.palco.activo = g(pfx+'palcoActivo').checked;
+      if(g(pfx+'palcoNombre')) st.palco.nombre = g(pfx+'palcoNombre').value;
+      if(g(pfx+'palcoValor')) st.palco.valor = parseFloat(g(pfx+'palcoValor').value)||0;
+    }
+    if(g(pfx+'vipActivo')){
+      st.vip.activo = g(pfx+'vipActivo').checked;
+      if(g(pfx+'vipNombre')) st.vip.nombre = g(pfx+'vipNombre').value;
+      if(g(pfx+'vipValor')) st.vip.valor = parseFloat(g(pfx+'vipValor').value)||0;
+    }
+    st.categorias.forEach((c,i)=>{
+      const p = pfx+'c'+i+'-';
+      if(g(p+'nombre')) c.nombre = g(p+'nombre').value;
+      if(g(p+'precio')) c.precio = parseFloat(g(p+'precio').value)||0;
+      if(g(p+'cantidad')) c.cantidad = parseInt(g(p+'cantidad').value)||0;
+      if(g(p+'numerada')) c.numerada = g(p+'numerada').checked;
+      if(g(p+'servActivo')) c.servicio.activo = g(p+'servActivo').checked;
+      if(g(p+'servNombre')) c.servicio.nombre = g(p+'servNombre').value;
+      if(g(p+'servValor')) c.servicio.valor = parseFloat(g(p+'servValor').value)||0;
+    });
+    const dp = pfx+'draft-';
+    if(g(dp+'nombre')) st.draft.nombre = g(dp+'nombre').value;
+    if(g(dp+'precio')) st.draft.precio = parseFloat(g(dp+'precio').value)||0;
+    if(g(dp+'numerada')) st.draft.numerada = g(dp+'numerada').checked;
+    if(g(dp+'cantidad')) st.draft.cantidad = parseInt(g(dp+'cantidad').value)||0;
+    if(g(dp+'servActivo')) st.draft.servActivo = g(dp+'servActivo').checked;
+    if(g(dp+'servNombre')) st.draft.servNombre = g(dp+'servNombre').value;
+    if(g(dp+'servValor')) st.draft.servValor = parseFloat(g(dp+'servValor').value)||0;
+  },
+  catRender(key){
+    const wrap = document.getElementById('catPanelBody-'+key);
+    if(!wrap) return;
+    wrap.innerHTML = this.catPanelHtml(key, this._catState[key]);
+  },
+  catPanelHtml(key, st){
+    const pfx = 'cat-'+key+'-';
+    const catRows = st.categorias.map((c,i)=>{
+      const p = pfx+'c'+i+'-';
+      return `<div class="stat" style="margin-bottom:8px; text-align:left;">
+        <div class="row">
+          <div class="field" style="flex:2;"><label>Nombre categoría</label><input id="${p}nombre" value="${escapeHtml(c.nombre)}"></div>
+          <div class="field" style="flex:1;"><label>Precio</label><input id="${p}precio" type="number" min="0" value="${c.precio}"></div>
+        </div>
+        <div class="row">
+          <label class="chk" style="flex:1;"><input type="checkbox" id="${p}numerada" ${c.numerada?'checked':''} onchange="AdminApp.catToggle('${key}')"> Silla numerada</label>
+          <div class="field" style="flex:1;"><label>${c.numerada?'Cantidad de sillas':'Cantidad de cupos'}</label><input id="${p}cantidad" type="number" min="${c._persisted?c._cantidadOriginal:0}" value="${c.cantidad}"></div>
+        </div>
+        ${c._persisted?`<p class="hint">Ya creada con ${c._cantidadOriginal}; solo puedes aumentar la cantidad.</p>`:''}
+        ${c.numerada ? `
+        <label class="chk" style="margin-top:4px;"><input type="checkbox" id="${p}servActivo" ${c.servicio.activo?'checked':''} onchange="AdminApp.catToggle('${key}')"> Cobrar servicio con nombre propio a cada silla</label>
+        ${c.servicio.activo?`<div class="row"><div class="field" style="flex:2;"><label>Nombre del servicio</label><input id="${p}servNombre" value="${escapeHtml(c.servicio.nombre)}" placeholder="ej: Servicio ${escapeHtml(c.nombre||'')}"></div><div class="field" style="flex:1;"><label>Valor (COP)</label><input id="${p}servValor" type="number" min="0" value="${c.servicio.valor}"></div></div>`:''}
+        ` : `<p class="hint">General/sin numerar: no lleva servicio.</p>`}
+        <button class="btn btn-sm btn-danger" type="button" onclick="AdminApp.catRemoveCategoria('${key}',${i})" ${c._persisted?'disabled':''}>${c._persisted?'Ya guardada':'Quitar'}</button>
+      </div>`;
+    }).join('') || `<p class="hint">Aún no has creado categorías personalizadas.</p>`;
+
+    return `
+      <div class="stat" style="margin-bottom:10px; text-align:left;">
+        <b>Palco</b>
+        <label class="chk" style="margin:6px 0;"><input type="checkbox" id="${pfx}palcoActivo" ${st.palco.activo?'checked':''} onchange="AdminApp.catToggle('${key}')"> Cobrar servicio con nombre propio a cada silla de Palco</label>
+        ${st.palco.activo?`<div class="row"><div class="field" style="flex:2;"><label>Nombre del servicio</label><input id="${pfx}palcoNombre" value="${escapeHtml(st.palco.nombre)}" placeholder="ej: Servicio Palco"></div><div class="field" style="flex:1;"><label>Valor (COP)</label><input id="${pfx}palcoValor" type="number" min="0" value="${st.palco.valor}"></div></div>`:''}
+      </div>
+      <div class="stat" style="margin-bottom:10px; text-align:left;">
+        <b>VIP</b>
+        <label class="chk" style="margin:6px 0;"><input type="checkbox" id="${pfx}vipActivo" ${st.vip.activo?'checked':''} onchange="AdminApp.catToggle('${key}')"> Cobrar servicio con nombre propio a cada silla VIP</label>
+        ${st.vip.activo?`<div class="row"><div class="field" style="flex:2;"><label>Nombre del servicio</label><input id="${pfx}vipNombre" value="${escapeHtml(st.vip.nombre)}" placeholder="ej: Servicio VIP"></div><div class="field" style="flex:1;"><label>Valor (COP)</label><input id="${pfx}vipValor" type="number" min="0" value="${st.vip.valor}"></div></div>`:''}
+      </div>
+      <div class="section-title" style="margin-top:6px;"><h3 style="font-size:15px;">Categorías personalizadas</h3></div>
+      ${catRows}
+      <div class="stat" style="margin-top:10px; border:1px dashed var(--line); text-align:left;">
+        <b>+ Crear categoría</b>
+        <div class="row" style="margin-top:6px;">
+          <div class="field" style="flex:2;"><label>Nombre</label><input id="${pfx}draft-nombre" value="${escapeHtml(st.draft.nombre)}" placeholder="ej: Preferencial"></div>
+          <div class="field" style="flex:1;"><label>Precio</label><input id="${pfx}draft-precio" type="number" min="0" value="${st.draft.precio}"></div>
+        </div>
+        <label class="chk" style="margin:6px 0;"><input type="checkbox" id="${pfx}draft-numerada" ${st.draft.numerada?'checked':''} onchange="AdminApp.catToggle('${key}')"> Es una localidad numerada (silla asignada)</label>
+        <div class="field"><label>${st.draft.numerada?'Cantidad de sillas':'Cantidad de cupos'}</label><input id="${pfx}draft-cantidad" type="number" min="1" value="${st.draft.cantidad}"></div>
+        ${st.draft.numerada?`
+        <label class="chk" style="margin-top:4px;"><input type="checkbox" id="${pfx}draft-servActivo" ${st.draft.servActivo?'checked':''} onchange="AdminApp.catToggle('${key}')"> Cobrar servicio con nombre propio a cada silla</label>
+        ${st.draft.servActivo?`<div class="row"><div class="field" style="flex:2;"><label>Nombre del servicio</label><input id="${pfx}draft-servNombre" value="${escapeHtml(st.draft.servNombre)}" placeholder="ej: Servicio Preferencial"></div><div class="field" style="flex:1;"><label>Valor (COP)</label><input id="${pfx}draft-servValor" type="number" min="0" value="${st.draft.servValor}"></div></div>`:''}
+        `:`<p class="hint">General/sin numerar: no lleva servicio.</p>`}
+        <button class="btn btn-sm" type="button" onclick="AdminApp.catAddCategoria('${key}')">+ Agregar categoría</button>
+      </div>
+      ${key!=='nuevo' ? `<button class="btn btn-primary btn-block" style="margin-top:12px;" onclick="AdminApp.guardarCategorias('${key}')">Guardar categorías y servicio</button>` : `<p class="hint" style="margin-top:10px;">Estas categorías y servicios se guardarán al crear el evento.</p>`}
+    `;
+  },
+  catToggle(key){
+    this.catSync(key);
+    this.catRender(key);
+  },
+  catAddCategoria(key){
+    this.catSync(key);
+    const st = this._catState[key];
+    const d = st.draft;
+    if(!d.nombre || !d.nombre.trim()){ toast('Escribe un nombre para la categoría', true); return; }
+    if(!d.cantidad || d.cantidad<=0){ toast('Indica la cantidad de sillas/cupos', true); return; }
+    const id = 'cat' + Math.random().toString(36).slice(2,8);
+    st.categorias.push({
+      id, nombre:d.nombre.trim(), precio:d.precio||0, numerada:d.numerada, cantidad:d.cantidad,
+      servicio: d.numerada ? {activo:d.servActivo, nombre:d.servNombre||'', valor:d.servValor||0} : {activo:false,nombre:'',valor:0},
+      _persisted:false, _cantidadOriginal:0
+    });
+    st.draft = {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0};
+    this.catRender(key);
+    toast('Categoría agregada: '+d.nombre.trim());
+  },
+  catRemoveCategoria(key, idx){
+    this.catSync(key);
+    const st = this._catState[key];
+    const c = st.categorias[idx];
+    if(!c) return;
+    if(c._persisted){ toast('Esta categoría ya fue guardada y tiene sillas creadas; no se puede eliminar', true); return; }
+    st.categorias.splice(idx,1);
+    this.catRender(key);
+  },
+  // Guarda el servicio de Palco/VIP y las categorías personalizadas de un evento
+  // ya creado (usado desde "Ajustar palcos/VIP"). Valida que la cantidad de una
+  // categoría existente solo pueda aumentar, nunca reducirse.
+  async guardarCategorias(eventId){
+    this.catSync(eventId);
+    const st = this._catState[eventId];
+    const evento = this.eventos.find(e=>e.id===eventId);
+    if(!evento || !st) return;
+    for(const c of st.categorias){
+      if(!c.nombre || !c.nombre.trim()){ toast('Todas las categorías necesitan un nombre', true); return; }
+      if(c._persisted && c.cantidad < c._cantidadOriginal){
+        toast('La cantidad de "'+c.nombre+'" no puede ser menor a '+c._cantidadOriginal, true);
+        return;
+      }
+    }
+    const categorias = st.categorias.map(c=>({
+      id:c.id, nombre:c.nombre.trim(), precio:c.precio, numerada:c.numerada, cantidad:c.cantidad,
+      servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0}
+    }));
+    const servicios = {
+      palco: {activo:st.palco.activo, nombre:st.palco.nombre, valor:st.palco.valor},
+      vip: {activo:st.vip.activo, nombre:st.vip.nombre, valor:st.vip.valor}
+    };
+    const nuevoMapa = {...(evento.mapa||{}), servicios, categorias};
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventId);
+    if(error){ toast('Error guardando categorías: '+error.message, true); console.error(error); return; }
+    evento.mapa = nuevoMapa;
+    if(this.evento && this.evento.id===eventId) this.evento.mapa = nuevoMapa;
+    await Seats.growToMapa(evento);
+    st.categorias.forEach(c=>{ c._persisted = true; c._cantidadOriginal = c.cantidad; });
+    toast('Categorías y servicio guardados');
+    this.catRender(eventId);
   },
   async guardarMapa(id){
     const evento = this.eventos.find(e=>e.id===id);
@@ -2485,7 +2737,20 @@ const AdminApp = {
       vip: parseFloat(document.getElementById('evPrecioVip').value)||0,
       general: parseFloat(document.getElementById('evPrecioGeneral').value)||0
     };
-    const mapa = {palcos, vip, general, precios};
+    if(this._catState['nuevo']) this.catSync('nuevo');
+    const catSt = this._catState['nuevo'] || this.catBuildState(null);
+    for(const c of catSt.categorias){
+      if(!c.nombre || !c.nombre.trim()){ toast('Todas las categorías necesitan un nombre', true); return; }
+    }
+    const categorias = catSt.categorias.map(c=>({
+      id:c.id, nombre:c.nombre.trim(), precio:c.precio, numerada:c.numerada, cantidad:c.cantidad,
+      servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0}
+    }));
+    const servicios = {
+      palco: {activo:catSt.palco.activo, nombre:catSt.palco.nombre, valor:catSt.palco.valor},
+      vip: {activo:catSt.vip.activo, nombre:catSt.vip.nombre, valor:catSt.vip.valor}
+    };
+    const mapa = {palcos, vip, general, precios, servicios, categorias};
     let imagen_url = null;
     const imgFile = document.getElementById('evImagen').files[0];
     if(imgFile){
@@ -2495,6 +2760,7 @@ const AdminApp = {
     const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url}).select();
     if(error){ toast('Error creando el evento: '+error.message, true); console.error(error); return; }
     toast('Evento creado: '+codigo);
+    delete this._catState['nuevo'];
     await this.loadEventos();
     this.evento = data[0];
     await Seats.ensureSeeded(this.evento);
@@ -2694,10 +2960,13 @@ const AdminApp = {
   },
 
   categoriaOptions(){
+    const custom = ((this.evento && this.evento.mapa && this.evento.mapa.categorias) || [])
+      .map(c=>`<option value="${c.id}">${escapeHtml(c.nombre)}${c.numerada?' (numerada)':' (general)'}</option>`).join('');
     return `
       <option value="general">General</option>
       <option value="vip">VIP</option>
       <option value="palco">Palco numerado</option>
+      ${custom}
       <option value="patrocinador">Patrocinador ($0)</option>
       <option value="invitado">Invitado especial ($0)</option>
       <option value="otro">Otra categoría</option>`;
@@ -2707,6 +2976,7 @@ const AdminApp = {
     const ubicWrap = document.getElementById(prefix+'UbicWrap');
     const precioInput = document.getElementById(prefix+'Precio');
     if(cat==='patrocinador' || cat==='invitado'){ precioInput.value = 0; precioInput.disabled = true; } else { precioInput.disabled = false; }
+    const customCat = this.evento && this.evento.mapa && (this.evento.mapa.categorias||[]).find(c=>c.id===cat);
     let html = '';
     if(cat==='palco'){
       const totalPalcos = (this.evento && this.evento.mapa && this.evento.mapa.palcos) || 8;
@@ -2723,26 +2993,43 @@ const AdminApp = {
           <label style="margin-top:10px;">Silla disponible</label>
           <select id="${prefix}Silla"></select>
         </div>`;
+      const servPalco = CategoriaServicio.servicio(this.evento,'palco');
+      if(servPalco.activo && servPalco.valor>0) html += `<p class="hint">Incluye "${escapeHtml(servPalco.nombre||'Servicio')}": ${money(servPalco.valor)} por silla, se sumará al precio.</p>`;
     } else if(cat==='vip'){
       html = `<p class="hint">Se ubicará en la zona VIP del mapa del evento.</p>`;
+      const servVip = CategoriaServicio.servicio(this.evento,'vip');
+      if(servVip.activo && servVip.valor>0) html += `<p class="hint">Incluye "${escapeHtml(servVip.nombre||'Servicio')}": ${money(servVip.valor)} por silla, se sumará al precio.</p>`;
     } else if(cat==='general'){
       html = `
-        <label class="chk" style="margin-bottom:8px;"><input type="checkbox" id="${prefix}AsignaSilla" onchange="AdminApp.toggleGeneralSeat('${prefix}')"> Asignar número de silla</label>
+        <label class="chk" style="margin-bottom:8px;"><input type="checkbox" id="${prefix}AsignaSilla" onchange="AdminApp.toggleGeneralSeat('${prefix}','general')"> Asignar número de silla</label>
         <div id="${prefix}SillaGenWrap" class="hide">
           <label>Silla disponible</label>
           <select id="${prefix}Silla"></select>
         </div>`;
     } else if(cat==='otro'){
       html = `<label>Nombre de la categoría / ubicación</label><input id="${prefix}Otro" placeholder="ej: Backstage">`;
+    } else if(customCat){
+      if(customCat.numerada){
+        html = `<p class="hint">Se asignará automáticamente una silla libre de "${escapeHtml(customCat.nombre)}".</p>`;
+        if(customCat.servicio && customCat.servicio.activo && customCat.servicio.valor>0) html += `<p class="hint">Incluye "${escapeHtml(customCat.servicio.nombre||'Servicio')}": ${money(customCat.servicio.valor)} por silla, se sumará al precio.</p>`;
+      } else {
+        html = `
+          <label class="chk" style="margin-bottom:8px;"><input type="checkbox" id="${prefix}AsignaSilla" onchange="AdminApp.toggleGeneralSeat('${prefix}','${cat}')"> Asignar número de cupo</label>
+          <div id="${prefix}SillaGenWrap" class="hide">
+            <label>Cupo disponible</label>
+            <select id="${prefix}Silla"></select>
+          </div>`;
+      }
     }
     ubicWrap.innerHTML = html;
     if(cat==='palco') this.loadSeats(prefix,'palco');
   },
-  toggleGeneralSeat(prefix){
+  toggleGeneralSeat(prefix, zona){
+    zona = zona || 'general';
     const chk = document.getElementById(prefix+'AsignaSilla').checked;
     const wrap = document.getElementById(prefix+'SillaGenWrap');
     wrap.classList.toggle('hide', !chk);
-    if(chk) this.loadSeats(prefix,'general');
+    if(chk) this.loadSeats(prefix, zona);
   },
   toggleGrupoPalco(prefix){
     const chk = document.getElementById(prefix+'VenderGrupo').checked;
@@ -2772,11 +3059,9 @@ const AdminApp = {
   renderVenta(){
     const box = document.getElementById('a-venta');
     if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Primero crea y selecciona un evento en la pestaña "Eventos".</p></div>`; return; }
-    const servicio = Servicio.get(this.evento);
     box.innerHTML = `
       <div class="card" style="max-width:640px;">
         <div class="section-title"><h2 style="font-size:19px;">Venta / asignación individual — ${escapeHtml(this.evento.nombre)}</h2></div>
-        ${servicio.activo ? `<p class="hint" style="margin-bottom:10px;">Servicio activo: se sumará ${servicio.tipo==='por_ticket'?money(servicio.valor)+' a cada ticket':money(servicio.valor)+' repartido entre los tickets de esta venta'} al precio ingresado.</p>` : ''}
         <div class="grid-2">
           <div class="field"><label>Nombre del cliente</label><input id="vtaNombre"></div>
           <div class="field"><label>Cantidad de tickets</label><input id="vtaCantidad" type="number" min="1" value="1"></div>
@@ -2827,9 +3112,10 @@ const AdminApp = {
     if(cantidad<=0){ toast('Cantidad inválida', true); return null; }
     const esGratis = categoria==='patrocinador'||categoria==='invitado';
     const precioBase = esGratis ? 0 : (parseFloat(document.getElementById(prefix+'Precio').value)||0);
-    const servicioPorTicket = esGratis ? 0 : Servicio.porTicket(this.evento, cantidad);
+    const servicioPorTicket = esGratis ? 0 : CategoriaServicio.valorServicio(this.evento, categoria);
     const precio = precioBase + servicioPorTicket;
-    let ubicacion_tipo = categoria==='palco'?'palco':(categoria==='vip'?'vip':(categoria==='general'?'general':'general'));
+    const customCat = this.evento && this.evento.mapa && (this.evento.mapa.categorias||[]).find(c=>c.id===categoria);
+    let ubicacion_tipo = categoria==='palco'?'palco':(categoria==='vip'?'vip':(categoria==='general'?'general':(customCat?categoria:'general')));
 
     let zonaAsientos = null;
     let sillaManual = null;
@@ -2848,6 +3134,16 @@ const AdminApp = {
       zonaAsientos = 'vip';
     } else if(categoria==='otro'){
       ubicacionFija = document.getElementById(prefix+'Otro').value;
+    } else if(customCat){
+      if(customCat.numerada){
+        zonaAsientos = categoria;
+      } else {
+        const chk = document.getElementById(prefix+'AsignaSilla');
+        if(chk && chk.checked){
+          zonaAsientos = categoria;
+          if(cantidad===1 && seatEl && seatEl.value) sillaManual = {id:seatEl.value, numero:seatEl.selectedOptions[0].dataset.num};
+        }
+      }
     }
 
     let sillas = [];
@@ -2890,7 +3186,7 @@ const AdminApp = {
     if(cantidadGrupo<=0){ toast('Indica la cantidad de sillas del grupo', true); return; }
     const libres = await Seats.free(this.evento.id, 'palco', palco);
     if(libres.length < cantidadGrupo){ toast('Ese palco solo tiene '+libres.length+' silla(s) libre(s)', true); return; }
-    const servicioPorTicket = Servicio.porTicket(this.evento, cantidadGrupo);
+    const servicioPorTicket = CategoriaServicio.valorServicio(this.evento, 'palco');
     const precioUnit = precioUnitBase + servicioPorTicket;
     const grupo_codigo = genCode('GRP');
     const seatsToUse = libres.slice(0, cantidadGrupo);
@@ -2906,207 +3202,6 @@ const AdminApp = {
     toast('Palco '+palco+' vendido: '+cantidadGrupo+' sillas · Total '+money(precioUnit*cantidadGrupo));
     this.tickets = await DB.ticketsByEvento(this.evento.id);
     if(this.renderTickets) this.renderTickets();
-  },
-  renderMasiva(){
-    const box = document.getElementById('a-masiva');
-    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Primero selecciona un evento.</p></div>`; return; }
-    const servicio = Servicio.get(this.evento);
-    box.innerHTML = `
-      <div class="card" style="margin-bottom:14px;">
-        <div class="section-title"><h2 style="font-size:19px;">💰 Valor de servicio</h2></div>
-        <p class="hint">Se suma automáticamente al precio de cada boleta: en carga masiva, generar lote, venta individual, venta del vendedor (VT) y en "Comprar tickets" (el comprador lo ve y lo paga junto con el ticket).</p>
-        <label class="chk" style="margin-bottom:10px;"><input type="checkbox" id="servActivo" ${servicio.activo?'checked':''} onchange="AdminApp.toggleServicioForm()"> Cobrar valor de servicio</label>
-        <div id="servCamposWrap" class="${servicio.activo?'':'hide'}">
-          <div class="grid-2">
-            <div class="field"><label>Valor (COP)</label><input type="number" id="servValor" min="0" value="${servicio.valor||0}"></div>
-            <div class="field"><label>Se aplica</label>
-              <select id="servTipo">
-                <option value="por_ticket" ${servicio.tipo==='por_ticket'?'selected':''}>Por cada ticket individual</option>
-                <option value="total" ${servicio.tipo==='total'?'selected':''}>Valor total (se reparte entre las boletas de la venta)</option>
-              </select>
-            </div>
-          </div>
-        </div>
-        <button class="btn btn-primary" onclick="AdminApp.guardarServicio()">Guardar servicio</button>
-      </div>
-      <div class="grid-2">
-        <div class="card">
-          <div class="section-title"><h2 style="font-size:19px;">Carga masiva vía Excel</h2></div>
-          <p class="hint">Columnas esperadas: nombre, correo, cedula, categoria, ubicacion, precio (precio es opcional).</p>
-          ${servicio.activo ? `<p class="hint">Servicio activo: se sumará ${servicio.tipo==='por_ticket'?money(servicio.valor)+' a cada ticket':money(servicio.valor)+' repartido entre los tickets del archivo'}.</p>` : ''}
-          <div class="field"><input type="file" id="excelFile" accept=".xlsx,.xls,.csv"></div>
-          <button class="btn btn-primary btn-block" onclick="AdminApp.cargarExcel()">Procesar archivo</button>
-        </div>
-        <div class="card">
-          <div class="section-title"><h2 style="font-size:19px;">Generar lote sin datos</h2></div>
-          <p class="hint">Crea tickets vacíos que luego asignarás por correo o cédula desde la pestaña "Tickets".</p>
-          ${servicio.activo ? `<p class="hint">Servicio activo: se sumará ${servicio.tipo==='por_ticket'?money(servicio.valor)+' a cada ticket':money(servicio.valor)+' repartido entre las boletas del lote'}.</p>` : ''}
-          <div class="field"><label>Cantidad</label><input type="number" id="loteCantidad" min="1" value="50"></div>
-          <div class="field"><label>Categoría</label><select id="loteCategoria" onchange="AdminApp.onLoteCategoriaChange()">${this.categoriaOptions()}</select></div>
-          <div class="field hide" id="loteOtraCatWrap"><label>Nombre de la nueva categoría</label><input id="loteOtraCategoria" placeholder="ej: Backstage, Prensa, Cortesía..."></div>
-          <div class="field"><label>Precio unitario (COP)</label><input type="number" id="lotePrecio" value="0"></div>
-          <div class="field">
-            <label class="chk" style="margin-bottom:8px;"><input type="checkbox" id="loteAsignaSillas" onchange="AdminApp.toggleLoteSillas()"> Asignar sillas a este lote</label>
-            <div id="loteSillasWrap" class="hide">
-              <label class="chk" style="margin-bottom:8px;"><input type="checkbox" id="loteSillasIlimitadas" onchange="AdminApp.toggleLoteSillasIlimitadas()"> Sillas ilimitadas (sin tope, sin numerar)</label>
-              <div id="loteSillasCantWrap">
-                <label>Cantidad de sillas a crear/numerar</label>
-                <input type="number" id="loteSillasCantidad" min="1" value="50">
-                <p class="hint">Se crearán sillas numeradas para esta categoría y cada ticket del lote quedará asociado a una silla libre.</p>
-              </div>
-            </div>
-          </div>
-          <button class="btn btn-block" onclick="AdminApp.generarLote()">Generar lote</button>
-        </div>
-      </div>`;
-  },
-  toggleServicioForm(){
-    const chk = document.getElementById('servActivo').checked;
-    document.getElementById('servCamposWrap').classList.toggle('hide', !chk);
-  },
-  async guardarServicio(){
-    if(!this.evento){ toast('Selecciona un evento', true); return; }
-    const activo = document.getElementById('servActivo').checked;
-    const valor = parseFloat(document.getElementById('servValor').value)||0;
-    const tipo = document.getElementById('servTipo').value;
-    const nuevoMapa = {...(this.evento.mapa||{}), servicio:{activo, valor, tipo}};
-    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', this.evento.id);
-    if(error){ toast('Error guardando el servicio: '+error.message, true); console.error(error); return; }
-    this.evento.mapa = nuevoMapa;
-    const ev = this.eventos.find(e=>e.id===this.evento.id);
-    if(ev) ev.mapa = nuevoMapa;
-    toast('Configuración de servicio guardada');
-    this.renderMasiva();
-  },
-  onLoteCategoriaChange(){
-    const cat = document.getElementById('loteCategoria').value;
-    document.getElementById('loteOtraCatWrap').classList.toggle('hide', cat!=='otro');
-  },
-  toggleLoteSillas(){
-    const chk = document.getElementById('loteAsignaSillas').checked;
-    document.getElementById('loteSillasWrap').classList.toggle('hide', !chk);
-  },
-  toggleLoteSillasIlimitadas(){
-    const ilim = document.getElementById('loteSillasIlimitadas').checked;
-    document.getElementById('loteSillasCantWrap').classList.toggle('hide', ilim);
-  },
-  async cargarExcel(){
-    const file = document.getElementById('excelFile').files[0];
-    if(!file){ toast('Selecciona un archivo', true); return; }
-    await loadXlsxLib();
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, {type:'array'});
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet, {defval:''});
-    if(!rows.length){ toast('El archivo está vacío', true); return; }
-    await Seats.ensureSeeded(this.evento);
-    const servicioPorTicket = Servicio.porTicket(this.evento, rows.length);
-    const zonasAsientos = ['palco','vip','general'];
-    const tickets = rows.map(r=>{
-      const categoria = String(r.categoria||r.Categoria||'general').toLowerCase();
-      const zona = zonasAsientos.includes(categoria) ? categoria : null;
-      const precioBase = r.precio!=='' && r.precio!=null ? parseFloat(r.precio) : 0;
-      return {
-        evento_id: this.evento.id,
-        codigo: genCode('TK'),
-        nombre_cliente: String(r.nombre||r.Nombre||''),
-        correo: String(r.correo||r.Correo||''),
-        cedula: String(r.cedula||r.Cedula||r['Cédula']||''),
-        categoria,
-        ubicacion_tipo: zona || 'general',
-        ubicacion_detalle: String(r.ubicacion||r.Ubicacion||''),
-        precio: Math.round(precioBase + servicioPorTicket),
-        tipo_pago: 'pendiente',
-        vt_usuario:'Admin',
-        estado: (r.nombre||r.Nombre) ? 'vendido' : 'pendiente',
-        _zona: zona
-      };
-    });
-    const rowsToInsert = tickets.map(({_zona, ...t})=>t);
-    const {data: created, error} = await sb.from('tickets').insert(rowsToInsert).select();
-    if(error){ toast('Error cargando el excel: '+error.message, true); console.error(error); return; }
-    // Reserva un asiento real del mapa para cada ticket con categoría palco/vip/general:
-    // respeta la ubicación indicada en el Excel si coincide con una silla libre, y si no,
-    // asigna automáticamente (creando sillas nuevas si hacen falta).
-    for(const zona of zonasAsientos){
-      const items = tickets.map((t,i)=>({t,c:created[i]})).filter(x=>x.t._zona===zona);
-      if(!items.length) continue;
-      let libres = await Seats.free(this.evento.id, zona);
-      const usados = new Set();
-      const pendientes = [];
-      for(const it of items){
-        const texto = (it.t.ubicacion_detalle||'').trim().toUpperCase();
-        const match = texto ? libres.find(a=>!usados.has(a.id) && a.numero.toUpperCase()===texto) : null;
-        if(match){ usados.add(match.id); await Seats.occupy(match.id, it.c.id); }
-        else pendientes.push(it);
-      }
-      if(pendientes.length){
-        const restantes = libres.filter(a=>!usados.has(a.id));
-        let extra = [];
-        if(restantes.length < pendientes.length){
-          extra = await Seats.assignAuto(this.evento.id, zona, pendientes.length - restantes.length);
-        }
-        const pool = [...restantes, ...extra];
-        for(let k=0;k<pendientes.length;k++){
-          const asiento = pool[k];
-          if(!asiento) continue;
-          await Seats.occupy(asiento.id, pendientes[k].c.id);
-          await sb.from('tickets').update({ubicacion_detalle: asiento.numero}).eq('id', pendientes[k].c.id);
-        }
-      }
-    }
-    toast(tickets.length+' tickets cargados desde Excel'+(servicioPorTicket>0?' (incluye servicio de '+money(servicioPorTicket)+' c/u)':''));
-    this.tickets = await DB.ticketsByEvento(this.evento.id);
-  },
-  async generarLote(){
-    const cantidad = parseInt(document.getElementById('loteCantidad').value)||0;
-    let categoria = document.getElementById('loteCategoria').value;
-    const precioBase = categoria==='patrocinador'||categoria==='invitado' ? 0 : (parseFloat(document.getElementById('lotePrecio').value)||0);
-    if(cantidad<=0){ toast('Cantidad inválida', true); return; }
-    const servicioPorTicket = categoria==='patrocinador'||categoria==='invitado' ? 0 : Servicio.porTicket(this.evento, cantidad);
-    const precio = precioBase + servicioPorTicket;
-    let nombreCategoriaLibre = null;
-    if(categoria==='otro'){
-      nombreCategoriaLibre = (document.getElementById('loteOtraCategoria').value||'').trim();
-      if(!nombreCategoriaLibre){ toast('Escribe el nombre de la nueva categoría', true); return; }
-      categoria = nombreCategoriaLibre.toLowerCase().replace(/[^a-z0-9]+/g,'_');
-    }
-    const asignaSillas = document.getElementById('loteAsignaSillas').checked;
-    const sillasIlimitadas = asignaSillas && document.getElementById('loteSillasIlimitadas').checked;
-    const sillasCantidad = asignaSillas && !sillasIlimitadas ? (parseInt(document.getElementById('loteSillasCantidad').value)||0) : 0;
-
-    const zona = categoria==='palco'?'palco':(categoria==='vip'?'vip':(categoria==='general'?'general':categoria));
-
-    let asientosLibres = [];
-    if(asignaSillas && !sillasIlimitadas){
-      if(sillasCantidad<=0){ toast('Indica la cantidad de sillas a crear', true); return; }
-      // Crea las sillas numeradas que falten para esta zona/categoría
-      const existentes = (await Seats.all(this.evento.id)).filter(a=>a.zona===zona);
-      const faltan = sillasCantidad - existentes.length;
-      if(faltan>0){
-        const prefix = (nombreCategoriaLibre ? nombreCategoriaLibre.slice(0,3).toUpperCase() : categoria.slice(0,3).toUpperCase());
-        const nuevas = Array.from({length:faltan}).map((_,i)=>({evento_id:this.evento.id, zona, numero:`${prefix}${existentes.length+i+1}`}));
-        await sb.from('asientos').insert(nuevas);
-      }
-      asientosLibres = await Seats.free(this.evento.id, zona);
-    }
-
-    const rows = Array.from({length:cantidad}).map((_,i)=>{
-      let ubicacion_detalle = null;
-      if(asignaSillas && !sillasIlimitadas && asientosLibres[i]) ubicacion_detalle = asientosLibres[i].numero;
-      return {
-        evento_id: this.evento.id, codigo: genCode('TK'), categoria,
-        ubicacion_tipo: zona, ubicacion_detalle,
-        precio, tipo_pago:'pendiente', vt_usuario:'Admin', estado:'pendiente'
-      };
-    });
-    const {data, error} = await sb.from('tickets').insert(rows).select();
-    if(error){ toast('Error generando el lote: '+error.message, true); console.error(error); return; }
-    if(asignaSillas && !sillasIlimitadas){
-      for(let i=0;i<data.length;i++){ if(asientosLibres[i]) await Seats.occupy(asientosLibres[i].id, data[i].id); }
-    }
-    toast(cantidad+' tickets generados. Asígnalos desde la pestaña Tickets.'+(servicioPorTicket>0?' (incluye servicio de '+money(servicioPorTicket)+' c/u)':''));
-    this.tickets = await DB.ticketsByEvento(this.evento.id);
   },
   renderTickets(){
     const box = document.getElementById('a-tickets');
@@ -3502,13 +3597,11 @@ const VTApp = {
     const box = document.getElementById('v-vender');
     if(!this.evento){ this.renderEventoPicker(); return; }
     const disponibles = this.identity.ilimitado ? '∞' : Math.max(0, (this.identity.limite||0) - (this.identity.asignados||0));
-    const servicio = Servicio.get(this.evento);
     box.innerHTML = `
       <div class="card" style="max-width:640px;">
         <span class="back" onclick="VTApp.cambiarEvento()">‹ cambiar evento</span>
         <div class="section-title"><h2 style="font-size:19px;">Vender tickets — ${escapeHtml(this.evento.nombre)}</h2></div>
         <p class="hint" style="margin-bottom:14px;">Disponibles para ti: <b>${disponibles}</b></p>
-        ${servicio.activo ? `<p class="hint" style="margin-bottom:10px;">Servicio activo: se sumará ${servicio.tipo==='por_ticket'?money(servicio.valor)+' a cada ticket':money(servicio.valor)+' repartido entre los tickets de esta venta'} al precio que ingreses.</p>` : ''}
         <div class="grid-2">
           <div class="field"><label>Nombre del cliente</label><input id="vVtaNombre"></div>
           <div class="field"><label>Cantidad</label><input id="vVtaCantidad" type="number" min="1" value="1"></div>
