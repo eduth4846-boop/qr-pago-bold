@@ -1372,9 +1372,10 @@ const Seats = {
     const {count} = await sb.from('asientos').select('id',{count:'exact', head:true}).eq('evento_id', evento.id);
     if(count && count>0) return;
     const mapa = evento.mapa || {palcos:8, vip:30, general:120};
+    const sillasPalco = Number(mapa.sillasPalco)||8;
     const rows = [];
     for(let p=1;p<=mapa.palcos;p++){
-      for(let s=1;s<=8;s++){
+      for(let s=1;s<=sillasPalco;s++){
         rows.push({evento_id:evento.id, zona:'palco', numero:`P${p}-S${s}`});
       }
     }
@@ -1394,15 +1395,27 @@ const Seats = {
   // usado cuando el admin aumenta las cantidades desde "Ajustar palcos/VIP".
   async growToMapa(evento){
     const mapa = evento.mapa || {palcos:0, vip:0, general:0};
+    const sillasPalco = Number(mapa.sillasPalco)||8;
     const existentes = await this.all(evento.id);
-    const palcosExistentes = new Set(existentes.filter(a=>a.zona==='palco').map(a=>a.numero.split('-')[0]));
+    // Sillas ya existentes por cada palco (P1, P2, ...), para poder agregar solo
+    // las que falten -tanto en palcos nuevos como en palcos ya creados cuando se
+    // aumenta la cantidad de sillas por palco- siempre numerándolas en orden.
+    const sillasPorPalco = {};
+    existentes.filter(a=>a.zona==='palco').forEach(a=>{
+      const pKey = a.numero.split('-')[0];
+      if(!sillasPorPalco[pKey]) sillasPorPalco[pKey] = new Set();
+      sillasPorPalco[pKey].add(a.numero.split('-')[1]);
+    });
     const vipExistentes = existentes.filter(a=>a.zona==='vip').length;
     const generalExistentes = existentes.filter(a=>a.zona==='general').length;
     const rows = [];
     for(let p=1;p<=(mapa.palcos||0);p++){
-      if(palcosExistentes.has(`P${p}`)) continue;
-      for(let s=1;s<=8;s++){
-        rows.push({evento_id:evento.id, zona:'palco', numero:`P${p}-S${s}`});
+      const pKey = `P${p}`;
+      const yaTiene = sillasPorPalco[pKey] || new Set();
+      for(let s=1;s<=sillasPalco;s++){
+        const sKey = `S${s}`;
+        if(yaTiene.has(sKey)) continue;
+        rows.push({evento_id:evento.id, zona:'palco', numero:`${pKey}-${sKey}`});
       }
     }
     for(let v=vipExistentes+1; v<=(mapa.vip||0); v++){
@@ -2438,6 +2451,13 @@ const AdminApp = {
               <select id="evPalcos">${[0,1,2,3,4,5,6,7,8,9,10,12,14,16,18,20].map(n=>`<option value="${n}" ${n===8?'selected':''}>${n===0?'0 (ninguno)':n+' palco'+(n>1?'s':'')}</option>`).join('')}</select>
             </div>
             <div class="field" style="flex:1;">
+              <label>Sillas por palco</label>
+              <input id="evSillasPalco" type="number" min="1" value="8" placeholder="8">
+            </div>
+          </div>
+          <p class="hint" style="margin-top:-8px;">Escribe cuántas sillas numeradas quieres en cada palco; se enumerarán automáticamente (S1, S2, S3...).</p>
+          <div class="row">
+            <div class="field" style="flex:1;">
               <label>Puestos VIP</label>
               <select id="evVip">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===30?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
             </div>
@@ -2492,6 +2512,12 @@ const AdminApp = {
               <select id="mapaEditPalcos-${e.id}">${[0,1,2,3,4,5,6,7,8,9,10,12,14,16,18,20].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.palcos)||0)?'selected':''}>${n===0?'0 (ninguno)':n+' palco'+(n>1?'s':'')}</option>`).join('')}</select>
             </div>
             <div class="field" style="flex:1;">
+              <label>Sillas por palco</label>
+              <input id="mapaEditSillasPalco-${e.id}" type="number" min="${(e.mapa&&e.mapa.sillasPalco)||8}" value="${(e.mapa&&e.mapa.sillasPalco)||8}">
+            </div>
+          </div>
+          <div class="row">
+            <div class="field" style="flex:1;">
               <label>Puestos VIP</label>
               <select id="mapaEditVip-${e.id}">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.vip)!==undefined?(e.mapa&&e.mapa.vip):30)?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
             </div>
@@ -2501,7 +2527,7 @@ const AdminApp = {
             </div>
           </div>
           <button class="btn btn-primary btn-sm btn-block" onclick="AdminApp.guardarMapa('${e.id}')">Guardar y actualizar mapa</button>
-          <p class="hint">Solo se agregan palcos/puestos/cupos nuevos; los existentes y sus ocupantes no se modifican. Deja una zona en "0 / ninguno" para que no aparezca como ubicación disponible.</p>
+          <p class="hint">Solo se pueden aumentar las cantidades (palcos, sillas por palco, puestos, cupos), nunca reducirlas; los existentes y sus ocupantes no se modifican. Deja una zona en "0 / ninguno" para que no aparezca como ubicación disponible.</p>
           <div style="margin-top:14px; border-top:1px dashed var(--line); padding-top:10px;">
             <button class="btn btn-sm" type="button" onclick="AdminApp.toggleCategoriasPanel('${e.id}')">🏷️ Categorías y servicio por silla</button>
             <div id="catPanel-${e.id}" class="hide" style="margin-top:10px; border:1px solid var(--line); border-radius:12px; padding:12px;">
@@ -2710,17 +2736,24 @@ const AdminApp = {
     const vip = parseInt(document.getElementById('mapaEditVip-'+id).value, 10);
     const general = parseInt(document.getElementById('mapaEditGeneral-'+id).value, 10);
     const mapaActual = evento.mapa || {palcos:0, vip:0, general:0};
+    const sillasPalcoActual = Number(mapaActual.sillasPalco)||8;
+    const sillasPalcoEl = document.getElementById('mapaEditSillasPalco-'+id);
+    const sillasPalco = sillasPalcoEl ? (parseInt(sillasPalcoEl.value, 10) || sillasPalcoActual) : sillasPalcoActual;
     if(palcos < (mapaActual.palcos||0) || vip < (mapaActual.vip||0) || general < (mapaActual.general||0)){
       toast('No se pueden reducir las cantidades, solo aumentarlas', true);
       return;
     }
-    const nuevoMapa = {...mapaActual, palcos, vip, general};
+    if(sillasPalco < sillasPalcoActual){
+      toast('No puedes reducir la cantidad de sillas por palco, solo aumentarla', true);
+      return;
+    }
+    const nuevoMapa = {...mapaActual, palcos, sillasPalco, vip, general};
     const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', id);
     if(error){ toast('Error actualizando el evento: '+error.message, true); console.error(error); return; }
     evento.mapa = nuevoMapa;
     if(this.evento && this.evento.id===id) this.evento.mapa = nuevoMapa;
     await Seats.growToMapa(evento);
-    toast('Mapa actualizado: '+palcos+' palcos, '+vip+' VIP, '+general+' general');
+    toast('Mapa actualizado: '+palcos+' palcos ('+sillasPalco+' sillas c/u), '+vip+' VIP, '+general+' general');
     this.renderEventos();
   },
   async crearEvento(){
@@ -2728,9 +2761,11 @@ const AdminApp = {
     const fecha = document.getElementById('evFecha').value || null;
     const hora = document.getElementById('evHora').value || null;
     const palcos = parseInt(document.getElementById('evPalcos').value, 10) || 0;
+    const sillasPalco = parseInt(document.getElementById('evSillasPalco').value, 10) || 8;
     const vip = parseInt(document.getElementById('evVip').value, 10) || 0;
     const general = parseInt(document.getElementById('evGeneral').value, 10) || 0;
     if(!nombre){ toast('Escribe un nombre para el evento', true); return; }
+    if(palcos>0 && sillasPalco<=0){ toast('Indica cuántas sillas tendrá cada palco', true); return; }
     const codigo = genCode('EVT');
     const precios = {
       palco: parseFloat(document.getElementById('evPrecioPalco').value)||0,
@@ -2750,7 +2785,7 @@ const AdminApp = {
       palco: {activo:catSt.palco.activo, nombre:catSt.palco.nombre, valor:catSt.palco.valor},
       vip: {activo:catSt.vip.activo, nombre:catSt.vip.nombre, valor:catSt.vip.valor}
     };
-    const mapa = {palcos, vip, general, precios, servicios, categorias};
+    const mapa = {palcos, sillasPalco, vip, general, precios, servicios, categorias};
     let imagen_url = null;
     const imgFile = document.getElementById('evImagen').files[0];
     if(imgFile){
