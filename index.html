@@ -791,6 +791,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="a-usuarios" onclick="AdminApp.tab('a-usuarios')">Usuarios QR/VT</div>
         <div class="pill-tab" data-tab="a-stats" onclick="AdminApp.tab('a-stats')">Estadísticas</div>
         <div class="pill-tab" data-tab="a-mapa" onclick="AdminApp.tab('a-mapa')">Mapa del evento</div>
+        <div class="pill-tab" data-tab="a-patro" onclick="AdminApp.tab('a-patro')">Patrocinadores</div>
         <div class="pill-tab" data-tab="a-compras" onclick="AdminApp.tab('a-compras')">Solicitudes de compra</div>
         <div class="pill-tab" data-tab="a-chat" onclick="AdminApp.tab('a-chat')">Chat</div>
       </div>
@@ -799,6 +800,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div id="a-usuarios" class="tab-pane hide"></div>
       <div id="a-stats" class="tab-pane hide"></div>
       <div id="a-mapa" class="tab-pane hide"></div>
+      <div id="a-patro" class="tab-pane hide"></div>
       <div id="a-compras" class="tab-pane hide"></div>
       <div id="a-chat" class="tab-pane hide"></div>
     </section>
@@ -2415,8 +2417,8 @@ const AdminApp = {
     this._comprasPollTimer = setInterval(()=>this.checkComprasPendientes(), 25000);
     if(this._comprasBellTimer) clearInterval(this._comprasBellTimer);
     this._comprasBellTimer = setInterval(()=>{
-      if(this.comprasAlert.count>0 && !this.comprasAlert.revisada) bellSound();
-    }, 120000);
+      if(this.comprasAlert.count>0 && !this.comprasAlert.revisada){ bellSound(); speak('Tienes solicitudes pendientes'); }
+    }, 15000);
     if(this._comprasChannel){ try{ sb.removeChannel(this._comprasChannel); }catch(e){} }
     this._comprasChannel = sb.channel('solicitudes-compra-watch')
       .on('postgres_changes', {event:'*', schema:'public', table:'solicitudes_compra'}, ()=>{ this.checkComprasPendientes(); })
@@ -2429,6 +2431,7 @@ const AdminApp = {
     if(total>0 && newestId !== this.comprasAlert.lastId){
       this.comprasAlert.lastId = newestId;
       this.comprasAlert.revisada = false;
+      bellSound(); speak('Tienes solicitudes pendientes');
     }
     if(total===0){ this.comprasAlert.lastId = null; this.comprasAlert.revisada = true; }
     this.comprasAlert.count = total;
@@ -2454,6 +2457,7 @@ const AdminApp = {
     if(name==='a-usuarios') this.renderUsuarios();
     if(name==='a-stats') this.renderStats();
     if(name==='a-mapa') this.renderMapa();
+    if(name==='a-patro') this.renderPatrocinadores();
     if(name==='a-compras'){
       this.renderCompras();
       this.comprasAlert.revisada = true;
@@ -2466,6 +2470,94 @@ const AdminApp = {
     if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento activo para editar su mapa.</p></div>`; return; }
     box.innerHTML = `<div class="card" style="margin-bottom:12px;"><p class="hint">Arrastra el encabezado (⠿) de cada palco, la zona VIP o la zona general para reubicarla. Pasa el cursor sobre una silla para ver su número. Los cambios se guardan y se reflejan en el mapa que ve el usuario.</p></div><div id="a-mapa-canvas"></div>`;
     MapView.render(document.getElementById('a-mapa-canvas'), this.evento.id, null, {editable:true});
+  },
+  /* ---------- Ubicaciones para patrocinadores (palcos a valor 0) ---------- */
+  async renderPatrocinadores(){
+    const box = document.getElementById('a-patro');
+    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento primero.</p></div>`; return; }
+    box.innerHTML = `<div class="card"><p class="hint">Cargando…</p></div>`;
+    const categorias = (this.evento.mapa && this.evento.mapa.categorias) || [];
+    const sponsors = categorias.filter(c=>c.patrocinio);
+    const asientos = await Seats.all(this.evento.id);
+    const bloques = sponsors.map(c=>{
+      const sillas = asientos.filter(a=>a.zona===c.id).sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
+      const libres = sillas.filter(a=>!a.ocupado);
+      const ocupadas = sillas.filter(a=>a.ocupado);
+      return `
+        <div class="card" style="margin-top:14px;">
+          <div class="section-title"><h2 style="font-size:17px;">${escapeHtml(c.nombre)}</h2></div>
+          <p class="hint">${sillas.length} sillas numeradas · valor $0 · ${ocupadas.length} asignadas / ${libres.length} disponibles</p>
+          <div class="table-wrap"><table><thead><tr><th>Silla</th><th>Estado</th><th>Asignar a</th><th></th></tr></thead>
+          <tbody>
+            ${sillas.map(a=>`
+              <tr>
+                <td>${escapeHtml(a.numero)}</td>
+                <td>${a.ocupado?'Asignada':'Libre'}</td>
+                <td>${a.ocupado?'—':`<input id="patroNom-${a.id}" placeholder="Nombre del patrocinador/invitado" style="min-width:180px;">`}</td>
+                <td>${a.ocupado?'':`<button class="btn btn-sm btn-primary" onclick="AdminApp.generarTicketPatrocinador('${c.id}','${a.id}')">Generar ticket</button>`}</td>
+              </tr>`).join('')}
+          </tbody></table></div>
+        </div>`;
+    }).join('') || `<p class="hint" style="margin-top:10px;">Aún no has creado ubicaciones para patrocinadores.</p>`;
+
+    box.innerHTML = `
+      <div class="card">
+        <div class="section-title"><h2 style="font-size:19px;">Nueva ubicación para patrocinador</h2></div>
+        <p class="hint">Crea un palco de cortesía (valor $0) con sus sillas numeradas. Se crea automáticamente en el mapa del evento.</p>
+        <div class="row">
+          <div class="field" style="flex:2;"><label>Nombre del palco</label><input id="patroNombre" placeholder="ej: Palco Patrocinador Coca-Cola"></div>
+          <div class="field" style="flex:1;"><label>Cantidad de sillas numeradas</label><input id="patroCantidad" type="number" min="1" value="10"></div>
+        </div>
+        <button class="btn btn-primary" onclick="AdminApp.crearPatrocinador()">+ Crear ubicación</button>
+      </div>
+      ${bloques}`;
+  },
+  async crearPatrocinador(){
+    if(!this.evento){ toast('Selecciona un evento primero', true); return; }
+    const nombre = document.getElementById('patroNombre').value.trim();
+    const cantidad = parseInt(document.getElementById('patroCantidad').value, 10) || 0;
+    if(!nombre){ toast('Escribe el nombre del palco', true); return; }
+    if(!cantidad || cantidad<=0){ toast('Indica cuántas sillas numeradas tendrá', true); return; }
+    const id = 'patro' + Math.random().toString(36).slice(2,8);
+    const categorias = [...((this.evento.mapa && this.evento.mapa.categorias) || [])];
+    categorias.push({id, nombre, precio:0, numerada:true, cantidad, servicio:{activo:false,nombre:'',valor:0}, patrocinio:true});
+    const nuevoMapa = {...(this.evento.mapa||{}), categorias};
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', this.evento.id);
+    if(error){ toast('Error creando la ubicación: '+error.message, true); return; }
+    this.evento.mapa = nuevoMapa;
+    const idxEv = this.eventos.findIndex(e=>e.id===this.evento.id);
+    if(idxEv>=0) this.eventos[idxEv].mapa = nuevoMapa;
+    await Seats.growToMapa(this.evento);
+    toast('Ubicación creada: '+nombre+' ('+cantidad+' sillas numeradas)');
+    this.renderPatrocinadores();
+  },
+  async generarTicketPatrocinador(catId, asientoId){
+    const input = document.getElementById('patroNom-'+asientoId);
+    const nombre = input ? input.value.trim() : '';
+    if(!nombre){ toast('Escribe a nombre de quién va la silla', true); return; }
+    const cat = ((this.evento.mapa && this.evento.mapa.categorias) || []).find(c=>c.id===catId);
+    const {data: aRows} = await sb.from('asientos').select('*').eq('id', asientoId).limit(1);
+    const asiento = aRows && aRows[0];
+    if(!asiento || asiento.ocupado){ toast('Esta silla ya no está disponible', true); this.renderPatrocinadores(); return; }
+    const row = {
+      evento_id: this.evento.id,
+      codigo: genCode('TK'),
+      codigo_validacion: genCode('VAL'),
+      categoria: cat ? cat.nombre : 'Patrocinador',
+      ubicacion_tipo: catId,
+      ubicacion_detalle: asiento.numero,
+      precio: 0,
+      nombre_cliente: nombre,
+      tipo_pago: 'cortesia',
+      vt_usuario: 'Patrocinio',
+      estado: 'vendido'
+    };
+    const {data: created, error} = await sb.from('tickets').insert(row).select();
+    if(error){ toast('Error generando el ticket: '+error.message, true); return; }
+    await sb.from('asientos').update({ocupado:true, ticket_id: created[0].id}).eq('id', asientoId);
+    toast('Ticket de cortesía generado para '+nombre);
+    if(this.evento) this.tickets = await DB.ticketsByEvento(this.evento.id);
+    this.renderPatrocinadores();
   },
   async setEventoActivo(evento){
     this.evento = evento;
@@ -3317,7 +3409,7 @@ const AdminApp = {
     await sb.from('vendedores').delete().eq('id', id);
     this.renderUsuarios();
   },
-  renderStats(){
+  async renderStats(){
     const box = document.getElementById('a-stats');
     if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento.</p></div>`; return; }
     const t = this.tickets;
@@ -3326,6 +3418,45 @@ const AdminApp = {
     const escaneados = t.filter(x=>x.escaneado);
     const porEscanear = vendidos.filter(x=>!x.escaneado);
     const total = vendidos.reduce((a,x)=>a+Number(x.precio||0),0);
+
+    /* ---- Consolidado de ventas por vendedor ---- */
+    const porVendedorMap = {};
+    vendidos.forEach(x=>{
+      const key = x.vt_usuario || 'Admin / Punto de venta';
+      if(!porVendedorMap[key]) porVendedorMap[key] = {cantidad:0, total:0};
+      porVendedorMap[key].cantidad++;
+      porVendedorMap[key].total += Number(x.precio||0);
+    });
+    const porVendedorRows = Object.keys(porVendedorMap).sort((a,b)=>porVendedorMap[b].total-porVendedorMap[a].total);
+
+    /* ---- Consolidado por tipo de pago ---- */
+    const tiposFijos = ['efectivo','transferencia'];
+    const porPagoMap = {};
+    tiposFijos.forEach(tp=> porPagoMap[tp] = {cantidad:0, total:0});
+    vendidos.forEach(x=>{
+      const key = (x.tipo_pago || 'sin especificar').toLowerCase();
+      if(!porPagoMap[key]) porPagoMap[key] = {cantidad:0, total:0};
+      porPagoMap[key].cantidad++;
+      porPagoMap[key].total += Number(x.precio||0);
+    });
+    const etiquetaPago = k => k==='efectivo'?'Efectivo':k==='transferencia'?'Transferencia':k==='bold'?'Bold (pasarela)':k==='sin especificar'?'Sin especificar':(k.charAt(0).toUpperCase()+k.slice(1));
+
+    /* ---- Lecturas de los lectores QR ---- */
+    let lecturas = [];
+    try{
+      const {data} = await sb.from('lecturas_qr').select('*').eq('evento_id', this.evento.id).order('created_at',{ascending:false});
+      lecturas = data || [];
+    }catch(e){ lecturas = []; }
+    const lecturasValidas = lecturas.filter(l=>l.resultado==='valida');
+    const lecturasFallidas = lecturas.filter(l=>l.resultado==='fallida');
+    const porLectorMap = {};
+    lecturas.forEach(l=>{
+      const key = l.lector || 'Sin identificar';
+      if(!porLectorMap[key]) porLectorMap[key] = {validas:0, fallidas:0};
+      if(l.resultado==='valida') porLectorMap[key].validas++; else porLectorMap[key].fallidas++;
+    });
+    const porLectorRows = Object.keys(porLectorMap).sort((a,b)=>(porLectorMap[b].validas+porLectorMap[b].fallidas)-(porLectorMap[a].validas+porLectorMap[a].fallidas));
+
     box.innerHTML = `
       <div class="grid-4">
         <div class="stat"><b>${vendidos.length}</b><span>Vendidos</span></div>
@@ -3336,6 +3467,30 @@ const AdminApp = {
       <div class="card" style="margin-top:16px;">
         <div class="section-title"><h2 style="font-size:19px;">Consolidado de dinero</h2></div>
         <div class="stat"><b>${money(total)}</b><span>Total recaudado</span></div>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <div class="section-title"><h2 style="font-size:19px;">Total de ventas por vendedor</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>Vendedor</th><th>Tickets vendidos</th><th>Total recaudado</th></tr></thead>
+        <tbody>${porVendedorRows.length ? porVendedorRows.map(v=>`<tr><td>${escapeHtml(v)}</td><td>${porVendedorMap[v].cantidad}</td><td>${money(porVendedorMap[v].total)}</td></tr>`).join('') : '<tr><td colspan=3 class="hint">Aún no hay ventas registradas.</td></tr>'}</tbody></table></div>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <div class="section-title"><h2 style="font-size:19px;">Consolidado por tipo de pago</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>Tipo de pago</th><th>Tickets</th><th>Total recaudado</th></tr></thead>
+        <tbody>${Object.keys(porPagoMap).sort((a,b)=>porPagoMap[b].total-porPagoMap[a].total).map(k=>`<tr><td>${etiquetaPago(k)}</td><td>${porPagoMap[k].cantidad}</td><td>${money(porPagoMap[k].total)}</td></tr>`).join('')}</tbody></table></div>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <div class="section-title"><h2 style="font-size:19px;">Lecturas de los lectores QR</h2></div>
+        <div class="grid-4">
+          <div class="stat"><b>${lecturas.length}</b><span>Lecturas totales</span></div>
+          <div class="stat"><b>${lecturasValidas.length}</b><span>Lecturas válidas</span></div>
+          <div class="stat"><b>${lecturasFallidas.length}</b><span>Lecturas fallidas</span></div>
+          <div class="stat"><b>${porLectorRows.length}</b><span>Lectores activos</span></div>
+        </div>
+        <div class="table-wrap" style="margin-top:10px;"><table><thead><tr><th>Lector (usuario QR)</th><th>Válidas</th><th>Fallidas</th><th>Total</th></tr></thead>
+        <tbody>${porLectorRows.length ? porLectorRows.map(l=>`<tr><td>${escapeHtml(l)}</td><td>${porLectorMap[l].validas}</td><td>${porLectorMap[l].fallidas}</td><td>${porLectorMap[l].validas+porLectorMap[l].fallidas}</td></tr>`).join('') : '<tr><td colspan=4 class="hint">Aún no hay lecturas registradas para este evento.</td></tr>'}</tbody></table></div>
       </div>`;
   },
   async renderChat(){
@@ -3484,27 +3639,42 @@ const QRApp = {
       };
     }catch(e){ toast('No se pudo iniciar NFC: '+e.message, true); }
   },
+  // Guarda cada intento de lectura (válida o fallida) para el consolidado de
+  // estadísticas del admin. Nunca interrumpe el flujo del escáner si falla.
+  async registrarLectura(codigo, resultado, motivo, ticket){
+    try{
+      await sb.from('lecturas_qr').insert({
+        evento_id: (ticket && ticket.evento_id) || (this.evento && this.evento.id) || null,
+        ticket_id: ticket ? ticket.id : null,
+        codigo: codigo || null,
+        lector: this.identity ? this.identity.usuario : null,
+        resultado, motivo
+      });
+    }catch(e){ /* no bloquea el escaneo si la tabla aún no existe */ }
+  },
   async handleCode(raw){
     this.stopScanner();
     let codigo = raw;
     try{ const parsed = JSON.parse(raw); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
     const {data} = await sb.from('tickets').select('*').eq('codigo', codigo).limit(1);
     const ticket = data && data[0];
-    if(!ticket){ this.showResult('bad', 'Entrada inválida', 'Este código no corresponde a ningún ticket.'); speak('Entrada inválida'); beepAlert(); return; }
+    if(!ticket){ this.registrarLectura(codigo,'fallida','invalido',null); this.showResult('bad', 'Entrada inválida', 'Este código no corresponde a ningún ticket.'); speak('Entrada inválida'); beepAlert(); return; }
     if(this.evento && ticket.evento_id !== this.evento.id){
-      this.showResult('bad', 'Entrada de otro evento', 'Este ticket no pertenece al evento seleccionado.'); speak('Entrada inválida'); beepAlert(); return;
+      this.registrarLectura(codigo,'fallida','otro_evento',ticket); this.showResult('bad', 'Entrada de otro evento', 'Este ticket no pertenece al evento seleccionado.'); speak('Entrada inválida'); beepAlert(); return;
     }
     const {data: evData} = await sb.from('eventos').select('*').eq('id', ticket.evento_id).limit(1);
     const evento = evData && evData[0];
-    if(evento && evento.estado==='pausado'){ this.showResult('bad', 'Evento pausado', 'Los ingresos están pausados por el administrador.'); speak('Entrada inválida'); beepAlert(); return; }
-    if(ticket.estado==='anulado'){ this.showResult('bad', 'Ticket anulado', 'Este ticket fue anulado por el admin.'); speak('Entrada inválida'); beepAlert(); return; }
+    if(evento && evento.estado==='pausado'){ this.registrarLectura(codigo,'fallida','evento_pausado',ticket); this.showResult('bad', 'Evento pausado', 'Los ingresos están pausados por el administrador.'); speak('Entrada inválida'); beepAlert(); return; }
+    if(ticket.estado==='anulado'){ this.registrarLectura(codigo,'fallida','ticket_anulado',ticket); this.showResult('bad', 'Ticket anulado', 'Este ticket fue anulado por el admin.'); speak('Entrada inválida'); beepAlert(); return; }
     if(ticket.escaneado){
+      this.registrarLectura(codigo,'fallida','ya_escaneado',ticket);
       this.showResult('warn', 'Entrada ya fue escaneada', `Escaneado el ${fmtTime(ticket.escaneado_hora)} por ${ticket.escaneado_por||''}`);
       speak('Entrada ya fue escaneada');
       return;
     }
     const now = new Date().toISOString();
     await sb.from('tickets').update({escaneado:true, escaneado_por:this.identity.usuario, escaneado_hora:now}).eq('id', ticket.id);
+    this.registrarLectura(codigo,'valida',null,ticket);
     this.historial.unshift({...ticket, escaneado:true, escaneado_hora:now, escaneado_por:this.identity.usuario});
     this.showResult('ok', 'Entrada válida', `${ticket.nombre_cliente||''} · ${ticket.categoria} · ${ticket.ubicacion_detalle||ticket.ubicacion_tipo||''}`);
     speak('Entrada válida');
