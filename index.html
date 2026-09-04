@@ -758,6 +758,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="u-comprar" onclick="UsuarioApp.tab('u-comprar')">Comprar tickets</div>
         <div class="pill-tab" data-tab="u-chat" onclick="UsuarioApp.tab('u-chat')">Contacto / PQR</div>
         <div class="pill-tab" data-tab="u-mapa" onclick="UsuarioApp.tab('u-mapa')">Mapa del evento</div>
+        <div class="pill-tab" data-tab="u-transferir" onclick="UsuarioApp.tab('u-transferir')">Transferir tickets</div>
       </div>
       <div id="u-tickets" class="tab-pane"></div>
       <div id="u-comprar" class="tab-pane hide"></div>
@@ -781,6 +782,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         </div>
       </div>
       <div id="u-mapa" class="tab-pane hide"></div>
+      <div id="u-transferir" class="tab-pane hide"></div>
     </section>
 
     <!-- ============ ADMIN DASHBOARD ============ -->
@@ -2014,12 +2016,25 @@ const UsuarioApp = {
           <div class="holo"><div class="hologo">CC</div><div class="hosub">Sticker de seguridad</div></div>
         </div>
         <div class="code mono">${escapeHtml(t.codigo)}${t.codigo_validacion?` <span style="color:var(--cyan);">· Val: ${escapeHtml(t.codigo_validacion)}</span>`:''}</div>
+        <button class="btn btn-sm btn-block" style="margin-top:8px;" onclick="UsuarioApp.compartirTicket('${t.id}')">📤 Compartir</button>
       </div>`;
     }).join('');
     this.tickets.forEach(t=>{
       const el = document.getElementById('qr-'+t.id);
       if(el) renderQR(el, JSON.stringify({codigo:t.codigo, evento:t.evento_id}));
     });
+  },
+  // Comparte los datos del ticket usando el share sheet nativo del dispositivo
+  // (WhatsApp, Mensajes, etc.) y si el navegador no lo soporta, abre WhatsApp Web.
+  async compartirTicket(id){
+    const t = this.tickets.find(x=>x.id===id);
+    if(!t) return;
+    const evento = this.evento;
+    const texto = `🎟️ Entrada para ${evento?evento.nombre:'el evento'}\nCategoría: ${t.categoria}\nUbicación: ${t.ubicacion_detalle||t.ubicacion_tipo||''}\nCódigo: ${t.codigo}${t.codigo_validacion?`\nVal: ${t.codigo_validacion}`:''}`;
+    if(navigator.share){
+      try{ await navigator.share({title:'Mi entrada', text: texto}); return; }catch(e){ /* cancelado, sigue con el respaldo */ }
+    }
+    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
   },
   tab(name){
     document.querySelectorAll('#view-usuario .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
@@ -2040,6 +2055,103 @@ const UsuarioApp = {
       MapView.render(document.getElementById('u-mapa-canvas'), this.evento ? this.evento.id : null, this.tickets[0]);
     }
     if(name==='u-comprar') this.renderComprar();
+    if(name==='u-transferir') this.renderTransferir();
+  },
+  /* ---------- Transferencia P2P de tickets (código de 4 dígitos) ---------- */
+  renderTransferir(){
+    const box = document.getElementById('u-transferir');
+    const misTickets = (this.tickets||[]).filter(t=>t.estado==='vendido');
+    box.innerHTML = `
+      <div class="grid-2">
+        <div class="card">
+          <div class="section-title"><h2 style="font-size:19px;">Transferir un ticket mío</h2></div>
+          <p class="hint">Genera un código de 4 dígitos y compártelo con la persona a quien le vas a pasar el ticket. Al confirmarse, tu QR queda inválido y se genera uno nuevo para el nuevo dueño.</p>
+          ${this.identity ? '' : '<p class="hint">Ingresa primero con tu correo o cédula en "Mis tickets" para ver tus tickets disponibles.</p>'}
+          ${misTickets.length ? misTickets.map(t=>this.transferCardHtml(t)).join('') : (this.identity ? '<p class="hint">No tienes tickets activos para transferir.</p>' : '')}
+        </div>
+        <div class="card">
+          <div class="section-title"><h2 style="font-size:19px;">Recibir un ticket</h2></div>
+          <p class="hint">Ingresa el código de 4 dígitos que te compartió el dueño actual del ticket.</p>
+          <div class="field"><label>Código de 4 dígitos</label><input id="recCodigo" maxlength="4" inputmode="numeric" placeholder="0000"></div>
+          <button class="btn btn-primary btn-block" onclick="UsuarioApp.buscarCodigoTransferencia()">Buscar ticket</button>
+          <div id="recResultado" style="margin-top:14px;"></div>
+        </div>
+      </div>`;
+  },
+  transferCardHtml(t){
+    const activo = t.transfer_code && t.transfer_code_expires && new Date(t.transfer_code_expires) > new Date();
+    return `
+      <div class="stat" style="text-align:left; margin-bottom:10px;">
+        <b>${escapeHtml(t.categoria)} · ${escapeHtml(t.ubicacion_detalle||t.ubicacion_tipo||'')}</b>
+        ${t.escaneado ? `<p class="hint">Ya fue usada en el ingreso — no se puede transferir.</p>` :
+          activo ? `<p class="hint">Código activo: <b class="mono" style="font-size:22px; letter-spacing:4px;">${escapeHtml(t.transfer_code)}</b><br>Vence: ${fmtTime(t.transfer_code_expires)}</p><button class="btn btn-sm btn-danger" onclick="UsuarioApp.cancelarTransferencia('${t.id}')">Cancelar código</button>` :
+          `<button class="btn btn-sm" onclick="UsuarioApp.generarCodigoTransferencia('${t.id}')">Generar código de transferencia</button>`}
+      </div>`;
+  },
+  async generarCodigoTransferencia(id){
+    const codigo = String(Math.floor(1000 + Math.random()*9000));
+    const expires = new Date(Date.now() + 30*60*1000).toISOString();
+    const {error} = await sb.from('tickets').update({transfer_code: codigo, transfer_code_expires: expires}).eq('id', id);
+    if(error){ toast('Error generando el código: '+error.message, true); return; }
+    const t = this.tickets.find(x=>x.id===id);
+    if(t){ t.transfer_code = codigo; t.transfer_code_expires = expires; }
+    toast('Código generado: '+codigo+' · válido por 30 minutos');
+    this.renderTransferir();
+  },
+  async cancelarTransferencia(id){
+    await sb.from('tickets').update({transfer_code:null, transfer_code_expires:null}).eq('id', id);
+    const t = this.tickets.find(x=>x.id===id);
+    if(t){ t.transfer_code=null; t.transfer_code_expires=null; }
+    toast('Código de transferencia cancelado');
+    this.renderTransferir();
+  },
+  async buscarCodigoTransferencia(){
+    const codigo = document.getElementById('recCodigo').value.trim();
+    const box = document.getElementById('recResultado');
+    if(!/^\d{4}$/.test(codigo)){ toast('Ingresa los 4 dígitos del código', true); return; }
+    box.innerHTML = `<p class="hint">Buscando…</p>`;
+    const {data, error} = await sb.from('tickets').select('*').eq('transfer_code', codigo).limit(1);
+    const t = data && data[0];
+    if(error || !t){ box.innerHTML = `<p class="hint">Código no encontrado. Verifica que sea correcto.</p>`; return; }
+    if(t.escaneado){ box.innerHTML = `<p class="hint">Este ticket ya fue usado en el ingreso y no se puede transferir.</p>`; return; }
+    if(!t.transfer_code_expires || new Date(t.transfer_code_expires) < new Date()){ box.innerHTML = `<p class="hint">Este código ya expiró. Pide al dueño que genere uno nuevo.</p>`; return; }
+    let evNombre = '';
+    try{ const {data: ev} = await sb.from('eventos').select('nombre').eq('id', t.evento_id).limit(1); evNombre = ev && ev[0] ? ev[0].nombre : ''; }catch(e){}
+    box.innerHTML = `
+      <div class="stat" style="text-align:left; margin-bottom:10px;">
+        <b>${escapeHtml(t.categoria)} · ${escapeHtml(t.ubicacion_detalle||t.ubicacion_tipo||'')}</b>
+        <p class="hint">${escapeHtml(evNombre)}</p>
+      </div>
+      <p class="hint">Para pasar este ticket a tu propiedad, completa tus datos:</p>
+      <div class="field"><label>Nombre completo</label><input id="recNombre"></div>
+      <div class="field"><label>Cédula</label><input id="recCedula"></div>
+      <div class="field"><label>Correo</label><input id="recCorreo" type="email"></div>
+      <div class="field"><label>Teléfono</label><input id="recTelefono"></div>
+      <button class="btn btn-primary btn-block" onclick="UsuarioApp.confirmarRecepcion('${t.id}')">Aceptar y pasar a mi propiedad</button>`;
+  },
+  async confirmarRecepcion(id){
+    const nombre = document.getElementById('recNombre').value.trim();
+    const cedula = document.getElementById('recCedula').value.trim();
+    const correo = document.getElementById('recCorreo').value.trim();
+    const telefono = document.getElementById('recTelefono').value.trim();
+    if(!nombre || !cedula){ toast('Completa al menos tu nombre y cédula', true); return; }
+    // Se vuelve a validar el código justo antes de confirmar, por si expiró mientras se llenaba el formulario.
+    const {data} = await sb.from('tickets').select('*').eq('id', id).limit(1);
+    const t = data && data[0];
+    if(!t || t.escaneado || !t.transfer_code || !t.transfer_code_expires || new Date(t.transfer_code_expires) < new Date()){
+      toast('Este código ya no es válido, pide uno nuevo', true); this.renderTransferir(); return;
+    }
+    const nuevoCodigo = genCode('TK');
+    const nuevoVal = genCode('VAL');
+    const {error} = await sb.from('tickets').update({
+      nombre_cliente: nombre, cedula, correo, telefono,
+      codigo: nuevoCodigo, codigo_validacion: nuevoVal,
+      transfer_code: null, transfer_code_expires: null
+    }).eq('id', id);
+    if(error){ toast('Error completando la transferencia: '+error.message, true); return; }
+    toast('¡Ticket transferido a tu nombre! Cargando tu nuevo QR…');
+    document.getElementById('userLookup').value = correo || cedula;
+    await this.login();
   },
   sendChat(){
     const input = document.getElementById('uChatInput');
