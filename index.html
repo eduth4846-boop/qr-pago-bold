@@ -787,7 +787,6 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
     <section id="view-admin" class="hide">
       <div class="tabs">
         <div class="pill-tab active" data-tab="a-eventos" onclick="AdminApp.tab('a-eventos')">Eventos</div>
-        <div class="pill-tab" data-tab="a-venta" onclick="AdminApp.tab('a-venta')">Venta individual</div>
         <div class="pill-tab" data-tab="a-tickets" onclick="AdminApp.tab('a-tickets')">Tickets</div>
         <div class="pill-tab" data-tab="a-usuarios" onclick="AdminApp.tab('a-usuarios')">Usuarios QR/VT</div>
         <div class="pill-tab" data-tab="a-stats" onclick="AdminApp.tab('a-stats')">Estadísticas</div>
@@ -796,7 +795,6 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="a-chat" onclick="AdminApp.tab('a-chat')">Chat</div>
       </div>
       <div id="a-eventos" class="tab-pane"></div>
-      <div id="a-venta" class="tab-pane hide"></div>
       <div id="a-tickets" class="tab-pane hide"></div>
       <div id="a-usuarios" class="tab-pane hide"></div>
       <div id="a-stats" class="tab-pane hide"></div>
@@ -961,6 +959,7 @@ function loadScriptOnce(src){
 }
 const loadQRCodeLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js');
 const loadHtml5QrcodeLib = ()=>loadScriptOnce('https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js');
+const loadExcelJsLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js');
 
 // Id de orden Bold persistido durante el checkout para soportar la redirección.
 function saveBoldOrder(orderId, solicitudId){
@@ -2424,7 +2423,7 @@ const AdminApp = {
       .subscribe();
   },
   async checkComprasPendientes(){
-    const {data, count} = await sb.from('solicitudes_compra').select('id,created_at',{count:'exact'}).eq('estado','pendiente').eq('metodo_pago','transferencia').order('created_at',{ascending:false}).limit(1);
+    const {data, count} = await sb.from('solicitudes_compra').select('id,created_at',{count:'exact'}).eq('estado','pendiente').neq('metodo_pago','bold').order('created_at',{ascending:false}).limit(1);
     const total = count || 0;
     const newestId = data && data[0] ? data[0].id : null;
     if(total>0 && newestId !== this.comprasAlert.lastId){
@@ -2451,7 +2450,6 @@ const AdminApp = {
     document.querySelectorAll('#view-admin .tab-pane').forEach(p=>p.classList.add('hide'));
     document.getElementById(name).classList.remove('hide');
     if(name==='a-eventos') this.renderEventos();
-    if(name==='a-venta') this.renderVenta();
     if(name==='a-tickets') this.renderTickets();
     if(name==='a-usuarios') this.renderUsuarios();
     if(name==='a-stats') this.renderStats();
@@ -2933,6 +2931,7 @@ const AdminApp = {
     if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento activo para ver sus solicitudes de compra.</p></div>`; return; }
     box.innerHTML = `<div class="card"><p class="hint">Cargando solicitudes…</p></div>`;
     const compras = await this.loadCompras();
+    this._comprasCache = compras;
     if(!compras.length){ box.innerHTML = `<div class="card"><p class="hint">Aún no hay solicitudes de compra para este evento.</p></div>`; return; }
     box.innerHTML = compras.map(s=>{
       const items = (s.items||[]).map(it=>`${escapeHtml(it.ubicacion_detalle||it.zona)} · ${money(it.precio)}`).join('<br>');
@@ -2940,7 +2939,7 @@ const AdminApp = {
       return `<div class="stat" style="margin-bottom:12px;">
         <div class="row" style="justify-content:space-between; align-items:flex-start; flex-wrap:wrap;">
           <div>
-            <b>${escapeHtml(s.nombre)}</b> ${badge}<br>
+            <b>${escapeHtml(s.nombre)}</b> ${badge}${s.vt_usuario ? ` <span class="badge">Vendedor: ${escapeHtml(s.vt_usuario)}</span>` : ''}<br>
             <span class="hint">${escapeHtml(s.correo)} · ${escapeHtml(s.cedula)} · ${escapeHtml(s.telefono||'')}</span>
             <div class="hint" style="margin-top:6px;">${items}</div>
             <div><b>Total: ${money(s.total)}</b></div>
@@ -2951,6 +2950,7 @@ const AdminApp = {
         ${s.estado==='pendiente' && s.metodo_pago!=='bold' ? `<div class="row" style="margin-top:10px;">
           <button class="btn btn-sm btn-primary" onclick="AdminApp.aprobarSolicitud('${s.id}')">Autorizar</button>
           <button class="btn btn-sm btn-danger" onclick="AdminApp.rechazarSolicitud('${s.id}')">Rechazar</button>
+          <button class="btn btn-sm" onclick="AdminApp.editarSolicitud('${s.id}')">Editar</button>
           <button class="btn btn-sm" onclick="AdminApp.tab('a-chat'); setTimeout(()=>AdminApp.openRoom('${s.sala}'),50)">Ver chat</button>
         </div>` : ''}
         ${s.estado==='aprobada' ? `<div class="row" style="margin-top:10px;">
@@ -2958,6 +2958,70 @@ const AdminApp = {
         </div>` : ''}
       </div>`;
     }).join('');
+  },
+  /* ---------- Edición manual de una solicitud antes de aprobarla ---------- */
+  editarSolicitud(id){
+    const sol = (this._comprasCache||[]).find(s=>s.id===id);
+    if(!sol){ toast('Solicitud no encontrada', true); return; }
+    const itemsHtml = (sol.items||[]).map((it,i)=>`
+      <div class="grid-2" style="margin-bottom:8px;">
+        <div class="field"><label>Ubicación / detalle</label><input class="edSolUbic" value="${escapeHtml(it.ubicacion_detalle||it.zona||'')}"></div>
+        <div class="field"><label>Precio</label><input class="edSolPrecio" type="number" min="0" value="${Number(it.precio)||0}" oninput="AdminApp.recalcularTotalEdicion()"></div>
+      </div>`).join('') || '<p class="hint">Esta solicitud no tiene ubicaciones registradas.</p>';
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="editSolModal">
+        <div class="modal">
+          <div class="section-title"><h2 style="font-size:19px;">Editar solicitud de compra</h2></div>
+          <div class="grid-2">
+            <div class="field"><label>Nombre</label><input id="edSolNombre" value="${escapeHtml(sol.nombre||'')}"></div>
+            <div class="field"><label>Correo</label><input id="edSolCorreo" value="${escapeHtml(sol.correo||'')}"></div>
+            <div class="field"><label>Cédula</label><input id="edSolCedula" value="${escapeHtml(sol.cedula||'')}"></div>
+            <div class="field"><label>Teléfono</label><input id="edSolTelefono" value="${escapeHtml(sol.telefono||'')}"></div>
+            <div class="field"><label>Método de pago</label>
+              <select id="edSolMetodo">
+                <option value="efectivo" ${sol.metodo_pago==='efectivo'?'selected':''}>Efectivo</option>
+                <option value="transferencia" ${sol.metodo_pago==='transferencia'?'selected':''}>Transferencia</option>
+                <option value="pendiente" ${sol.metodo_pago==='pendiente'?'selected':''}>Pago pendiente</option>
+              </select>
+            </div>
+          </div>
+          <div class="section-title" style="margin-top:14px;"><h3 style="font-size:15px;">Ubicaciones y precios</h3></div>
+          <div id="edSolItems">${itemsHtml}</div>
+          <div style="margin-top:10px;"><b>Nuevo total: <span id="edSolTotal" style="color:var(--lime);">${money(sol.total)}</span></b></div>
+          <div class="row" style="margin-top:14px;">
+            <button class="btn btn-ghost" onclick="document.getElementById('editSolModal').remove()">Cancelar</button>
+            <button class="btn btn-primary" onclick="AdminApp.guardarEdicionSolicitud('${id}')">Guardar cambios</button>
+          </div>
+        </div>
+      </div>`);
+    this.recalcularTotalEdicion();
+  },
+  recalcularTotalEdicion(){
+    const precios = Array.from(document.querySelectorAll('.edSolPrecio')).map(i=>parseFloat(i.value)||0);
+    const total = precios.reduce((a,b)=>a+b,0);
+    const el = document.getElementById('edSolTotal');
+    if(el) el.textContent = money(total);
+  },
+  async guardarEdicionSolicitud(id){
+    const sol = (this._comprasCache||[]).find(s=>s.id===id);
+    if(!sol){ toast('Solicitud no encontrada', true); return; }
+    const ubicaciones = Array.from(document.querySelectorAll('.edSolUbic')).map(i=>i.value.trim());
+    const precios = Array.from(document.querySelectorAll('.edSolPrecio')).map(i=>parseFloat(i.value)||0);
+    const items = (sol.items||[]).map((it,i)=>({...it, ubicacion_detalle: ubicaciones[i], precio: precios[i]}));
+    const total = precios.reduce((a,b)=>a+b,0);
+    const {error} = await sb.from('solicitudes_compra').update({
+      nombre: document.getElementById('edSolNombre').value.trim(),
+      correo: document.getElementById('edSolCorreo').value.trim(),
+      cedula: document.getElementById('edSolCedula').value.trim(),
+      telefono: document.getElementById('edSolTelefono').value.trim(),
+      metodo_pago: document.getElementById('edSolMetodo').value,
+      items, total
+    }).eq('id', id);
+    if(error){ toast('Error guardando los cambios: '+error.message, true); return; }
+    toast('Solicitud actualizada');
+    const modal = document.getElementById('editSolModal');
+    if(modal) modal.remove();
+    this.renderCompras();
   },
   /* ---------- Envío de entradas por WhatsApp ---------- */
   async enviarTicketsWhatsApp(solicitudId){
@@ -3005,16 +3069,17 @@ const AdminApp = {
       nombre_cliente: sol.nombre,
       correo: sol.correo,
       cedula: sol.cedula,
-      tipo_pago: 'transferencia',
-      vt_usuario: 'Compra online',
+      tipo_pago: sol.metodo_pago || 'transferencia',
+      vt_usuario: sol.vt_usuario || 'Compra online',
       estado: 'vendido'
     }));
     const {data: created, error} = await sb.from('tickets').insert(rows).select();
     if(error){ toast('Error creando los tickets: '+error.message, true); return; }
     await Promise.all((sol.items||[]).map((it,i)=> it.asiento_id ? sb.from('asientos').update({ticket_id: created[i].id, ocupado:true}).eq('id', it.asiento_id) : Promise.resolve()));
-    await sb.from('solicitudes_compra').update({estado:'aprobada', metodo_pago:'transferencia'}).eq('id', id);
+    await sb.from('solicitudes_compra').update({estado:'aprobada'}).eq('id', id);
     this.ticketsPorSolicitud[id] = created;
-    await ChatKit.send(sol.sala, 'Admin', 'admin', 'Tu compra fue aprobada. Ya puedes ver tu(s) ticket(s) ingresando con tu correo o cédula en "Mis entradas".');
+    const mensajeAprobado = sol.vt_usuario ? 'Tu venta fue aprobada por el admin. El o los tickets ya fueron generados.' : 'Tu compra fue aprobada. Ya puedes ver tu(s) ticket(s) ingresando con tu correo o cédula en "Mis entradas".';
+    await ChatKit.send(sol.sala, 'Admin', 'admin', mensajeAprobado);
     toast('Compra aprobada y tickets generados');
     if(this.evento) this.tickets = await DB.ticketsByEvento(this.evento.id);
     const box = document.getElementById('a-compras');
@@ -3029,8 +3094,14 @@ const AdminApp = {
     if(sol.estado!=='pendiente'){ toast('Esta solicitud ya fue procesada'); return; }
     if(sol.metodo_pago==='bold'){ toast('Una orden Bold no se rechaza manualmente desde este panel.'); return; }
     await Promise.all((sol.items||[]).map(it=> it.asiento_id ? sb.from('asientos').update({ocupado:false, ticket_id:null}).eq('id', it.asiento_id) : Promise.resolve()));
+    if(sol.vt_usuario){
+      const {data: vtData} = await sb.from('vendedores').select('*').eq('usuario', sol.vt_usuario).limit(1);
+      const vendedor = vtData && vtData[0];
+      if(vendedor) await sb.from('vendedores').update({asignados: Math.max(0, (vendedor.asignados||0) - (sol.items||[]).length)}).eq('id', vendedor.id);
+    }
     await sb.from('solicitudes_compra').update({estado:'rechazada'}).eq('id', id);
-    await ChatKit.send(sol.sala, 'Admin', 'admin', 'Tu comprobante fue rechazado. Por favor contáctanos por este chat para más información.');
+    const mensajeRechazo = sol.vt_usuario ? 'Tu venta fue rechazada por el admin. Por favor contáctanos por este chat para más información.' : 'Tu comprobante fue rechazado. Por favor contáctanos por este chat para más información.';
+    await ChatKit.send(sol.sala, 'Admin', 'admin', mensajeRechazo);
     toast('Solicitud rechazada');
     const box = document.getElementById('a-compras');
     if(box && !box.classList.contains('hide')) this.renderCompras();
@@ -3038,256 +3109,15 @@ const AdminApp = {
     this.checkComprasPendientes();
   },
 
-  categoriaOptions(){
-    const custom = ((this.evento && this.evento.mapa && this.evento.mapa.categorias) || [])
-      .map(c=>`<option value="${c.id}">${escapeHtml(c.nombre)}${c.numerada?' (numerada)':' (general)'}</option>`).join('');
-    return `
-      <option value="general">General</option>
-      <option value="vip">VIP</option>
-      <option value="palco">Palco numerado</option>
-      ${custom}
-      <option value="patrocinador">Patrocinador ($0)</option>
-      <option value="invitado">Invitado especial ($0)</option>
-      <option value="otro">Otra categoría</option>`;
-  },
-  onCategoriaChange(prefix){
-    const cat = document.getElementById(prefix+'Categoria').value;
-    const ubicWrap = document.getElementById(prefix+'UbicWrap');
-    const precioInput = document.getElementById(prefix+'Precio');
-    if(cat==='patrocinador' || cat==='invitado'){ precioInput.value = 0; precioInput.disabled = true; } else { precioInput.disabled = false; }
-    const customCat = this.evento && this.evento.mapa && (this.evento.mapa.categorias||[]).find(c=>c.id===cat);
-    let html = '';
-    if(cat==='palco'){
-      const totalPalcos = (this.evento && this.evento.mapa && this.evento.mapa.palcos) || 8;
-      html = `
-        <label>Palco</label>
-        <select id="${prefix}Palco" onchange="AdminApp.loadSeats('${prefix}','palco')">${Array.from({length:totalPalcos}).map((_,i)=>`<option value="${i+1}">Palco ${i+1}</option>`).join('')}</select>
-        <label class="chk" style="margin-top:10px; margin-bottom:6px;"><input type="checkbox" id="${prefix}VenderGrupo" onchange="AdminApp.toggleGrupoPalco('${prefix}')"> Vender el palco completo (grupo de sillas numeradas)</label>
-        <div id="${prefix}GrupoWrap" class="hide">
-          <label>Cantidad de sillas del grupo</label>
-          <input type="number" id="${prefix}GrupoCantidad" min="1" value="1" oninput="AdminApp.calcGrupoTotal('${prefix}')">
-          <p class="hint" id="${prefix}GrupoTotalHint">Total del grupo: $0</p>
-        </div>
-        <div id="${prefix}SillaSingleWrap">
-          <label style="margin-top:10px;">Silla disponible</label>
-          <select id="${prefix}Silla"></select>
-        </div>`;
-      const servPalco = CategoriaServicio.servicio(this.evento,'palco');
-      if(servPalco.activo && servPalco.valor>0) html += `<p class="hint">Incluye "${escapeHtml(servPalco.nombre||'Servicio')}": ${money(servPalco.valor)} por silla, se sumará al precio.</p>`;
-    } else if(cat==='vip'){
-      html = `<p class="hint">Se ubicará en la zona VIP del mapa del evento.</p>`;
-      const servVip = CategoriaServicio.servicio(this.evento,'vip');
-      if(servVip.activo && servVip.valor>0) html += `<p class="hint">Incluye "${escapeHtml(servVip.nombre||'Servicio')}": ${money(servVip.valor)} por silla, se sumará al precio.</p>`;
-    } else if(cat==='general'){
-      html = `
-        <label class="chk" style="margin-bottom:8px;"><input type="checkbox" id="${prefix}AsignaSilla" onchange="AdminApp.toggleGeneralSeat('${prefix}','general')"> Asignar número de silla</label>
-        <div id="${prefix}SillaGenWrap" class="hide">
-          <label>Silla disponible</label>
-          <select id="${prefix}Silla"></select>
-        </div>`;
-    } else if(cat==='otro'){
-      html = `<label>Nombre de la categoría / ubicación</label><input id="${prefix}Otro" placeholder="ej: Backstage">`;
-    } else if(customCat){
-      if(customCat.numerada){
-        html = `<p class="hint">Se asignará automáticamente una silla libre de "${escapeHtml(customCat.nombre)}".</p>`;
-        if(customCat.servicio && customCat.servicio.activo && customCat.servicio.valor>0) html += `<p class="hint">Incluye "${escapeHtml(customCat.servicio.nombre||'Servicio')}": ${money(customCat.servicio.valor)} por silla, se sumará al precio.</p>`;
-      } else {
-        html = `
-          <label class="chk" style="margin-bottom:8px;"><input type="checkbox" id="${prefix}AsignaSilla" onchange="AdminApp.toggleGeneralSeat('${prefix}','${cat}')"> Asignar número de cupo</label>
-          <div id="${prefix}SillaGenWrap" class="hide">
-            <label>Cupo disponible</label>
-            <select id="${prefix}Silla"></select>
-          </div>`;
-      }
-    }
-    ubicWrap.innerHTML = html;
-    if(cat==='palco') this.loadSeats(prefix,'palco');
-  },
-  toggleGeneralSeat(prefix, zona){
-    zona = zona || 'general';
-    const chk = document.getElementById(prefix+'AsignaSilla').checked;
-    const wrap = document.getElementById(prefix+'SillaGenWrap');
-    wrap.classList.toggle('hide', !chk);
-    if(chk) this.loadSeats(prefix, zona);
-  },
-  toggleGrupoPalco(prefix){
-    const chk = document.getElementById(prefix+'VenderGrupo').checked;
-    document.getElementById(prefix+'GrupoWrap').classList.toggle('hide', !chk);
-    document.getElementById(prefix+'SillaSingleWrap').classList.toggle('hide', chk);
-    const precioEl = document.getElementById(prefix+'Precio');
-    if(precioEl && !precioEl.dataset.grupoBound){
-      precioEl.addEventListener('input', ()=> this.calcGrupoTotal(prefix));
-      precioEl.dataset.grupoBound = '1';
-    }
-    if(chk) this.calcGrupoTotal(prefix);
-  },
-  calcGrupoTotal(prefix){
-    const cant = parseInt(document.getElementById(prefix+'GrupoCantidad').value)||0;
-    const precio = parseFloat(document.getElementById(prefix+'Precio').value)||0;
-    const hint = document.getElementById(prefix+'GrupoTotalHint');
-    if(hint) hint.textContent = 'Total del grupo ('+cant+' silla'+(cant===1?'':'s')+'): '+money(cant*precio);
-  },
-  async loadSeats(prefix, zona){
-    if(!this.evento){ toast('Selecciona primero un evento', true); return; }
-    const palco = zona==='palco' ? document.getElementById(prefix+'Palco').value : null;
-    const free = await Seats.free(this.evento.id, zona, palco);
-    const sel = document.getElementById(prefix+'Silla');
-    if(!sel) return;
-    sel.innerHTML = free.length ? free.map(s=>`<option value="${s.id}" data-num="${s.numero}">${s.numero}</option>`).join('') : `<option value="">Sin sillas libres</option>`;
-  },
-  renderVenta(){
-    const box = document.getElementById('a-venta');
-    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Primero crea y selecciona un evento en la pestaña "Eventos".</p></div>`; return; }
-    box.innerHTML = `
-      <div class="card" style="max-width:640px;">
-        <div class="section-title"><h2 style="font-size:19px;">Venta / asignación individual — ${escapeHtml(this.evento.nombre)}</h2></div>
-        <div class="grid-2">
-          <div class="field"><label>Nombre del cliente</label><input id="vtaNombre"></div>
-          <div class="field"><label>Cantidad de tickets</label><input id="vtaCantidad" type="number" min="1" value="1"></div>
-          <div class="field"><label>Correo</label><input id="vtaCorreo" type="email"></div>
-          <div class="field"><label>Cédula</label><input id="vtaCedula"></div>
-          <div class="field"><label>Categoría</label><select id="vtaCategoria" onchange="AdminApp.onCategoriaChange('vta')">${this.categoriaOptions()}</select></div>
-          <div class="field"><label>Precio (COP)</label><input id="vtaPrecio" type="number" min="0" value="0"></div>
-          <div class="field"><label>Tipo de pago</label><select id="vtaPago"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="pendiente">Pago pendiente</option></select></div>
-          <div class="field"><label>Vendido por (VT)</label><input id="vtaVT" value="Admin"></div>
-        </div>
-        <div class="field" id="vtaUbicWrap"></div>
-        <button class="btn btn-primary btn-block" onclick="AdminApp.crearVentaIndividual()">Generar ticket(s)</button>
-      </div>`;
-    this.onCategoriaChange('vta');
-  },
-  async crearVentaIndividual(){
-    if(!this.evento){ toast('Selecciona un evento', true); return; }
-    const categoria = document.getElementById('vtaCategoria').value;
-    const grupoChk = document.getElementById('vtaVenderGrupo');
-    if(categoria==='palco' && grupoChk && grupoChk.checked){
-      await this.venderGrupoPalco('vta', {
-        nombre_cliente: document.getElementById('vtaNombre').value.trim(),
-        correo: document.getElementById('vtaCorreo').value.trim(),
-        cedula: document.getElementById('vtaCedula').value.trim(),
-        tipo_pago: document.getElementById('vtaPago').value,
-        vt_usuario: document.getElementById('vtaVT').value.trim()||'Admin'
-      });
-      return;
-    }
-    const data = await this._venderIndividual('vta', categoria, {
-      nombre_cliente: document.getElementById('vtaNombre').value.trim(),
-      correo: document.getElementById('vtaCorreo').value.trim(),
-      cedula: document.getElementById('vtaCedula').value.trim(),
-      tipo_pago: document.getElementById('vtaPago').value,
-      vt_usuario: document.getElementById('vtaVT').value.trim()||'Admin'
-    });
-    if(data) this.tickets = await DB.ticketsByEvento(this.evento.id);
-  },
-  // Genera "cantidad" tickets con la categoría/ubicación del formulario identificado
-  // por "prefix" (vta = venta individual del admin, vVta = venta del vendedor VT).
-  // Si la categoría tiene asientos asociados (palco, vip, o general con "asignar
-  // silla"), reserva automáticamente esa cantidad de sillas libres del mapa —así
-  // el ticket queda SIEMPRE reflejado en el mapa del evento, sin importar cuántas
-  // boletas se vendan de una sola vez (antes solo funcionaba si cantidad era 1).
-  // También suma el valor de servicio configurado (ver Servicio) al precio.
-  async _venderIndividual(prefix, categoria, clienteInfo){
-    const cantidad = parseInt(document.getElementById(prefix+'Cantidad').value)||1;
-    if(cantidad<=0){ toast('Cantidad inválida', true); return null; }
-    const esGratis = categoria==='patrocinador'||categoria==='invitado';
-    const precioBase = esGratis ? 0 : (parseFloat(document.getElementById(prefix+'Precio').value)||0);
-    const servicioPorTicket = esGratis ? 0 : CategoriaServicio.valorServicio(this.evento, categoria);
-    const precio = precioBase + servicioPorTicket;
-    const customCat = this.evento && this.evento.mapa && (this.evento.mapa.categorias||[]).find(c=>c.id===categoria);
-    let ubicacion_tipo = categoria==='palco'?'palco':(categoria==='vip'?'vip':(categoria==='general'?'general':(customCat?categoria:'general')));
-
-    let zonaAsientos = null;
-    let sillaManual = null;
-    let ubicacionFija = null;
-    const seatEl = document.getElementById(prefix+'Silla');
-    if(categoria==='palco'){
-      zonaAsientos = 'palco';
-      if(cantidad===1 && seatEl && seatEl.value) sillaManual = {id:seatEl.value, numero:seatEl.selectedOptions[0].dataset.num};
-    } else if(categoria==='general'){
-      const chk = document.getElementById(prefix+'AsignaSilla');
-      if(chk && chk.checked){
-        zonaAsientos = 'general';
-        if(cantidad===1 && seatEl && seatEl.value) sillaManual = {id:seatEl.value, numero:seatEl.selectedOptions[0].dataset.num};
-      }
-    } else if(categoria==='vip'){
-      zonaAsientos = 'vip';
-    } else if(categoria==='otro'){
-      ubicacionFija = document.getElementById(prefix+'Otro').value;
-    } else if(customCat){
-      if(customCat.numerada){
-        zonaAsientos = categoria;
-      } else {
-        const chk = document.getElementById(prefix+'AsignaSilla');
-        if(chk && chk.checked){
-          zonaAsientos = categoria;
-          if(cantidad===1 && seatEl && seatEl.value) sillaManual = {id:seatEl.value, numero:seatEl.selectedOptions[0].dataset.num};
-        }
-      }
-    }
-
-    let sillas = [];
-    if(zonaAsientos){
-      if(sillaManual){
-        sillas = [sillaManual];
-      } else {
-        const asignadas = await Seats.assignAuto(this.evento.id, zonaAsientos, cantidad);
-        if(asignadas.length < cantidad) toast(`Solo se pudieron reservar ${asignadas.length} de ${cantidad} silla(s) en esa zona`, true);
-        sillas = asignadas.map(a=>({id:a.id, numero:a.numero}));
-      }
-    }
-
-    const rows = [];
-    for(let i=0;i<cantidad;i++){
-      const s = sillas[i];
-      rows.push({
-        evento_id: this.evento.id, codigo: genCode('TK'),
-        ...clienteInfo,
-        categoria, ubicacion_tipo,
-        ubicacion_detalle: s ? s.numero : (ubicacionFija!=null ? ubicacionFija : null),
-        precio, estado:'vendido'
-      });
-    }
-    const {data, error} = await sb.from('tickets').insert(rows).select();
-    if(error){ toast('Error generando la venta: '+error.message, true); console.error(error); return null; }
-    if(sillas.length){
-      for(let i=0;i<Math.min(sillas.length, data.length);i++) await Seats.occupy(sillas[i].id, data[i].id);
-    }
-    toast(cantidad+' ticket(s) generado(s) correctamente'+(servicioPorTicket>0?' (incluye servicio de '+money(servicioPorTicket)+' c/u)':''));
-    return data;
-  },
-  // Venta de un palco/categoría completo: un ticket por cada silla del grupo,
-  // todos ligados con un mismo código de grupo. El precio total es la suma
-  // del precio unitario (+ servicio) por cada silla incluida.
-  async venderGrupoPalco(prefix, clienteInfo){
-    const palco = document.getElementById(prefix+'Palco').value;
-    const cantidadGrupo = parseInt(document.getElementById(prefix+'GrupoCantidad').value)||0;
-    const precioUnitBase = parseFloat(document.getElementById(prefix+'Precio').value)||0;
-    if(cantidadGrupo<=0){ toast('Indica la cantidad de sillas del grupo', true); return; }
-    const libres = await Seats.free(this.evento.id, 'palco', palco);
-    if(libres.length < cantidadGrupo){ toast('Ese palco solo tiene '+libres.length+' silla(s) libre(s)', true); return; }
-    const servicioPorTicket = CategoriaServicio.valorServicio(this.evento, 'palco');
-    const precioUnit = precioUnitBase + servicioPorTicket;
-    const grupo_codigo = genCode('GRP');
-    const seatsToUse = libres.slice(0, cantidadGrupo);
-    const rows = seatsToUse.map(s=>({
-      evento_id: this.evento.id, codigo: genCode('TK'),
-      ...clienteInfo,
-      categoria:'palco', ubicacion_tipo:'palco', ubicacion_detalle: s.numero,
-      precio: precioUnit, grupo_codigo, estado:'vendido'
-    }));
-    const {data, error} = await sb.from('tickets').insert(rows).select();
-    if(error){ toast('Error generando el grupo: '+error.message, true); console.error(error); return; }
-    for(let i=0;i<data.length;i++) await Seats.occupy(seatsToUse[i].id, data[i].id);
-    toast('Palco '+palco+' vendido: '+cantidadGrupo+' sillas · Total '+money(precioUnit*cantidadGrupo));
-    this.tickets = await DB.ticketsByEvento(this.evento.id);
-    if(this.renderTickets) this.renderTickets();
-  },
   renderTickets(){
     const box = document.getElementById('a-tickets');
     if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento.</p></div>`; return; }
     box.innerHTML = `
       <div class="card">
-        <div class="section-title"><h2 style="font-size:19px;">Tickets de ${escapeHtml(this.evento.nombre)} (${this.tickets.length})</h2></div>
+        <div class="section-title" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+          <h2 style="font-size:19px;">Tickets de ${escapeHtml(this.evento.nombre)} (${this.tickets.length})</h2>
+          <button class="btn btn-sm btn-primary" id="exportExcelBtn" onclick="AdminApp.exportarTicketsExcel()">📊 Exportar a Excel</button>
+        </div>
         <div class="table-wrap"><table>
           <thead><tr><th>Código</th><th>Cód. validación</th><th>Cliente</th><th>Categoría</th><th>Ubicación</th><th>Precio</th><th>Pago</th><th>Estado</th><th>Escaneo</th><th></th></tr></thead>
           <tbody>${this.tickets.map(t=>`
@@ -3310,6 +3140,98 @@ const AdminApp = {
           </tbody>
         </table></div>
       </div>`;
+  },
+  // Exporta a un archivo .xlsx todos los tickets del evento seleccionado, con todos
+  // sus datos (cliente, ubicación, precio, pago, estado, etc.) y una imagen del QR
+  // de cada ticket incrustada en su fila (el mismo QR que se escanea en control de acceso).
+  async exportarTicketsExcel(){
+    if(!this.evento){ toast('Selecciona un evento', true); return; }
+    if(!this.tickets || !this.tickets.length){ toast('No hay tickets para exportar', true); return; }
+    const btn = document.getElementById('exportExcelBtn');
+    if(btn){ btn.disabled = true; btn.textContent = 'Generando Excel…'; }
+    NetworkActivity.begin();
+    try{
+      await Promise.all([loadExcelJsLib(), loadQRCodeLib()]);
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Tickets');
+      sheet.columns = [
+        {header:'Código', key:'codigo', width:16},
+        {header:'Cód. validación', key:'codigo_validacion', width:16},
+        {header:'Cliente', key:'nombre_cliente', width:26},
+        {header:'Correo', key:'correo', width:26},
+        {header:'Cédula', key:'cedula', width:16},
+        {header:'Teléfono', key:'telefono', width:16},
+        {header:'Categoría', key:'categoria', width:16},
+        {header:'Ubicación', key:'ubicacion_detalle', width:16},
+        {header:'Precio', key:'precio', width:14},
+        {header:'Tipo de pago', key:'tipo_pago', width:16},
+        {header:'Vendido por', key:'vt_usuario', width:18},
+        {header:'Estado', key:'estado', width:14},
+        {header:'Escaneado', key:'escaneado', width:14},
+        {header:'Fecha de creación', key:'created_at', width:20},
+        {header:'Contenido del QR', key:'qr_texto', width:36},
+        {header:'QR', key:'qr_img', width:14}
+      ];
+      sheet.getRow(1).font = {bold:true};
+      sheet.getRow(1).height = 20;
+      const colQrIndex = sheet.columns.length - 1; // índice (0-based) de la columna "QR"
+      for(let i=0;i<this.tickets.length;i++){
+        const t = this.tickets[i];
+        const filaExcel = i + 2; // la fila 1 (Excel) es el encabezado
+        const qrTexto = JSON.stringify({codigo:t.codigo, evento:t.evento_id});
+        sheet.addRow({
+          codigo: t.codigo||'',
+          codigo_validacion: t.codigo_validacion||'',
+          nombre_cliente: t.nombre_cliente||'',
+          correo: t.correo||'',
+          cedula: t.cedula||'',
+          telefono: t.telefono||'',
+          categoria: t.categoria||'',
+          ubicacion_detalle: t.ubicacion_detalle||t.ubicacion_tipo||'',
+          precio: Number(t.precio)||0,
+          tipo_pago: t.tipo_pago||'',
+          vt_usuario: t.vt_usuario||'',
+          estado: t.estado||'',
+          escaneado: t.escaneado ? 'Sí' : 'No',
+          created_at: t.created_at ? new Date(t.created_at).toLocaleString('es-CO') : '',
+          qr_texto: qrTexto,
+          qr_img: ''
+        });
+        sheet.getRow(filaExcel).height = 50;
+        // Genera la imagen del QR (el mismo contenido que usa el escáner de control de acceso)
+        // y la incrusta en la celda de esta fila.
+        const qrBox = document.createElement('div');
+        qrBox.style.position = 'absolute'; qrBox.style.left = '-9999px';
+        document.body.appendChild(qrBox);
+        new QRCode(qrBox, {text: qrTexto, width:130, height:130, colorDark:'#111014', colorLight:'#ffffff'});
+        await new Promise(res=>setTimeout(res, 40));
+        const qrEl = qrBox.querySelector('img') || qrBox.querySelector('canvas');
+        let dataUrl = null;
+        if(qrEl){
+          try{ dataUrl = qrEl.tagName==='CANVAS' ? qrEl.toDataURL('image/png') : qrEl.src; }catch(e){}
+        }
+        qrBox.remove();
+        if(dataUrl && dataUrl.indexOf('data:')===0){
+          const imageId = workbook.addImage({base64: dataUrl.replace(/^data:/,''), extension:'png'});
+          sheet.addImage(imageId, {tl:{col:colQrIndex, row:filaExcel-1}, ext:{width:46, height:46}, editAs:'oneCell'});
+        }
+      }
+      sheet.getColumn('precio').numFmt = '#,##0';
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'tickets_'+(this.evento.nombre||'evento').replace(/[^a-zA-Z0-9]+/g,'_')+'.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+      toast('Excel generado con '+this.tickets.length+' ticket(s)');
+    }catch(err){
+      console.error(err);
+      toast('Error generando el Excel: '+(err.message||err), true);
+    } finally {
+      NetworkActivity.end();
+      if(btn){ btn.disabled = false; btn.textContent = '📊 Exportar a Excel'; }
+    }
   },
   asignarCliente(id){
     const t = this.tickets.find(x=>x.id===id);
@@ -3758,8 +3680,10 @@ const VTApp = {
             <div id="vVtaServicioWrap" class="hide"><span class="hint">Servicio: </span><b id="vVtaServicio">${money(0)}</b></div>
             <div><span class="hint">Total: </span><b id="vVtaTotal" style="color:var(--lime); font-size:16px;">${money(0)}</b></div>
           </div>
-          <div class="field" style="margin-top:12px;"><label>Tipo de pago</label><select id="vVtaTipoPago"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="pendiente">Pago pendiente</option></select></div>
-          <button class="btn btn-primary btn-block btn-lg" style="margin-top:10px;" onclick="VTApp.venderSeleccion()" id="vVtaVenderBtn" disabled>🎟️ Vender ticket(s)</button>
+          <div class="field" style="margin-top:12px;"><label>Tipo de pago</label><select id="vVtaTipoPago" onchange="VTApp.onTipoPagoChange()"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="pendiente">Pago pendiente</option></select></div>
+          <div class="field hide" id="vVtaComprobanteWrap"><label>Adjuntar comprobante de la transferencia</label><input type="file" id="vVtaComprobante" accept="image/*,.pdf"></div>
+          <p class="hint" style="margin-top:6px;">La venta queda pendiente hasta que el admin la apruebe.</p>
+          <button class="btn btn-primary btn-block btn-lg" style="margin-top:10px;" onclick="VTApp.venderSeleccion()" id="vVtaVenderBtn" disabled>🎟️ Enviar venta para aprobación</button>
         </div>
       </div>`;
     MapView.render(document.getElementById('vVtaMapa'), evento.id, null, {editable:false, buyable:true, onSeatClick:(a)=>VTApp.seatMapClick(a)});
@@ -3824,8 +3748,16 @@ const VTApp = {
     document.getElementById('vVtaVenderBtn').disabled = cantidad===0;
     return {items, cantidad, totalBase, servicioTotal, total};
   },
-  // Cierra la venta: genera un ticket por cada ubicación elegida, ocupa las
-  // sillas correspondientes y descuenta el cupo del vendedor.
+  // Muestra el campo para adjuntar el comprobante solo cuando el pago es por transferencia.
+  onTipoPagoChange(){
+    const tipo = document.getElementById('vVtaTipoPago').value;
+    const wrap = document.getElementById('vVtaComprobanteWrap');
+    if(wrap) wrap.classList.toggle('hide', tipo!=='transferencia');
+  },
+  // Envía la venta como una solicitud de compra pendiente de aprobación del admin
+  // (en vez de crear el ticket directamente). Si el pago es por transferencia,
+  // exige adjuntar el comprobante para que el admin lo vea al aprobar/rechazar.
+  // El ticket real solo se genera cuando el admin la aprueba desde "Solicitudes de compra".
   async venderSeleccion(){
     const {items, cantidad, total} = this.actualizarTotalesVenta();
     if(!cantidad) return;
@@ -3833,37 +3765,77 @@ const VTApp = {
       const disponibles = Math.max(0, (this.identity.limite||0) - (this.identity.asignados||0));
       if(cantidad > disponibles){ toast(`Solo tienes ${disponibles} ticket(s) disponible(s) para vender`, true); return; }
     }
-    const btn = document.getElementById('vVtaVenderBtn');
-    btn.disabled = true; btn.textContent = 'Vendiendo…';
     const tipo_pago = document.getElementById('vVtaTipoPago').value;
+    const fileInput = document.getElementById('vVtaComprobante');
+    const file = fileInput ? fileInput.files[0] : null;
+    if(tipo_pago==='transferencia' && !file){ toast('Adjunta el comprobante de la transferencia', true); return; }
+    const btn = document.getElementById('vVtaVenderBtn');
+    btn.disabled = true; btn.textContent = 'Enviando…';
     const evento = this.evento;
     const cliente = this.venta.cliente;
-    const rows = items.map(x=>({
-      evento_id: evento.id, codigo: genCode('TK'),
-      nombre_cliente: cliente.nombre, correo: cliente.correo, cedula: cliente.cedula,
-      categoria: x.asiento.zona, ubicacion_tipo: x.asiento.zona, ubicacion_detalle: x.asiento.numero,
-      precio: x.precio + CategoriaServicio.valorServicio(evento, x.asiento.zona),
-      tipo_pago, vt_usuario: this.identity.usuario, estado:'vendido'
-    }));
-    const {data, error} = await sb.from('tickets').insert(rows).select();
-    if(error){ toast('Error generando la venta: '+error.message, true); console.error(error); btn.disabled=false; btn.textContent='🎟️ Vender ticket(s)'; return; }
-    for(let i=0;i<items.length;i++) await Seats.occupy(items[i].asiento.id, data[i].id);
-    await sb.from('vendedores').update({asignados:(this.identity.asignados||0)+cantidad}).eq('id', this.identity.id);
-    this.identity.asignados = (this.identity.asignados||0)+cantidad;
-    toast(cantidad+' ticket(s) vendido(s) correctamente · Total '+money(total));
-    // Queda listo para registrar la venta del siguiente cliente en el mismo evento.
-    this.venta.cliente = null;
-    this.venta.seleccion = {};
-    this.renderVender();
+    try{
+      let comprobante_url = null;
+      if(tipo_pago==='transferencia'){
+        const carpeta = 'ventas_vt/' + this.identity.usuario;
+        comprobante_url = await uploadToComprobantes(file, carpeta);
+      }
+      const solItems = items.map(x=>({
+        asiento_id: x.asiento.id, zona: x.asiento.zona, categoria: x.asiento.zona,
+        ubicacion_detalle: x.asiento.numero,
+        precio: x.precio + CategoriaServicio.valorServicio(evento, x.asiento.zona)
+      }));
+      // Se ocupan las sillas de inmediato para que no se puedan vender dos veces
+      // mientras la solicitud está pendiente de aprobación.
+      await Promise.all(items.map(x=> sb.from('asientos').update({ocupado:true}).eq('id', x.asiento.id)));
+      const {error} = await sb.from('solicitudes_compra').insert({
+        evento_id: evento.id,
+        sala: 'admin_vt_'+this.identity.usuario,
+        nombre: cliente.nombre, correo: cliente.correo, cedula: cliente.cedula, telefono: cliente.telefono,
+        items: solItems, total, comprobante_url, estado:'pendiente', metodo_pago: tipo_pago,
+        vt_usuario: this.identity.usuario
+      });
+      if(error){ toast('Error enviando la venta: '+error.message, true); console.error(error); btn.disabled=false; btn.textContent='🎟️ Enviar venta para aprobación'; return; }
+      await sb.from('vendedores').update({asignados:(this.identity.asignados||0)+cantidad}).eq('id', this.identity.id);
+      this.identity.asignados = (this.identity.asignados||0)+cantidad;
+      toast(cantidad+' ticket(s) enviado(s) para aprobación del admin · Total '+money(total));
+      // Queda listo para registrar la venta del siguiente cliente en el mismo evento.
+      this.venta.cliente = null;
+      this.venta.seleccion = {};
+      this.renderVender();
+    }catch(err){
+      toast('Error subiendo el comprobante: '+(err.message||err), true);
+      btn.disabled = false; btn.textContent = '🎟️ Enviar venta para aprobación';
+    }
   },
   async renderMis(){
     const box = document.getElementById('v-mis');
     const {data} = await sb.from('tickets').select('*').eq('vt_usuario', this.identity.usuario).order('created_at',{ascending:false});
     this.misTickets = data || [];
+    const {data: sols} = await sb.from('solicitudes_compra').select('*').eq('vt_usuario', this.identity.usuario).order('created_at',{ascending:false});
+    const misSolicitudes = (sols||[]).filter(s=>s.estado!=='aprobada');
     const total = this.misTickets.reduce((a,t)=>a+Number(t.precio||0),0);
     const efectivo = this.misTickets.filter(t=>t.tipo_pago==='efectivo').reduce((a,t)=>a+Number(t.precio||0),0);
     const transferencia = this.misTickets.filter(t=>t.tipo_pago==='transferencia').reduce((a,t)=>a+Number(t.precio||0),0);
+    const solicitudesHtml = misSolicitudes.length ? `
+      <div class="card" style="margin-bottom:16px;">
+        <div class="section-title"><h2 style="font-size:19px;">Ventas pendientes de aprobación</h2></div>
+        ${misSolicitudes.map(s=>{
+          const badge = s.estado==='rechazada' ? '<span class="badge bad">Rechazada</span>' : '<span class="badge warn">Pendiente</span>';
+          const items = (s.items||[]).map(it=>`${escapeHtml(it.ubicacion_detalle||it.zona)} · ${money(it.precio)}`).join('<br>');
+          return `<div class="stat" style="margin-bottom:10px;">
+            <div class="row" style="justify-content:space-between; align-items:flex-start; flex-wrap:wrap;">
+              <div>
+                <b>${escapeHtml(s.nombre)}</b> ${badge}<br>
+                <span class="hint">${items}</span><br>
+                <b>Total: ${money(s.total)}</b> · <span class="hint">${escapeHtml(s.metodo_pago)}</span>
+              </div>
+              ${s.comprobante_url ? `<img src="${s.comprobante_url}" class="comprobante-thumb">` : ''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : '';
     box.innerHTML = `
+      ${solicitudesHtml}
       <div class="grid-3" style="margin-bottom:16px;">
         <div class="stat"><b>${this.misTickets.length}</b><span>Tickets vendidos</span></div>
         <div class="stat"><b>${money(efectivo)}</b><span>En efectivo</span></div>
@@ -3871,21 +3843,9 @@ const VTApp = {
       </div>
       <div class="card">
         <div class="section-title"><h2 style="font-size:19px;">Total vendido: ${money(total)}</h2></div>
-        <div class="field"><label>Subir comprobante de pago (transferencia)</label><input type="file" id="compFile" accept="image/*,.pdf"></div>
-        <button class="btn" onclick="VTApp.subirComprobante()">Subir comprobante</button>
         <div class="table-wrap" style="margin-top:16px;"><table><thead><tr><th>Código</th><th>Cliente</th><th>Categoría</th><th>Precio</th><th>Pago</th></tr></thead>
         <tbody>${this.misTickets.map(t=>`<tr><td class="mono">${escapeHtml(t.codigo)}</td><td>${escapeHtml(t.nombre_cliente||'')}</td><td>${escapeHtml(t.categoria)}</td><td>${money(t.precio)}</td><td>${escapeHtml(t.tipo_pago)}</td></tr>`).join('')}</tbody></table></div>
       </div>`;
-  },
-  async subirComprobante(){
-    const file = document.getElementById('compFile').files[0];
-    if(!file){ toast('Selecciona un archivo', true); return; }
-    const path = `${this.identity.usuario}/${Date.now()}_${file.name}`;
-    const {error} = await sb.storage.from('comprobantes').upload(path, file);
-    if(error){ toast('Error subiendo el comprobante: '+error.message, true); console.error(error); return; }
-    const { data: pub } = sb.storage.from('comprobantes').getPublicUrl(path);
-    await sb.from('comprobantes').insert({vt_usuario:this.identity.usuario, archivo_url: pub.publicUrl});
-    toast('Comprobante subido correctamente');
   },
   renderChat(){
     const box = document.getElementById('v-chat');
