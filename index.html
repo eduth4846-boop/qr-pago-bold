@@ -2951,13 +2951,22 @@ const AdminApp = {
         <div class="card" style="margin-top:14px;">
           <div class="section-title"><h2 style="font-size:17px;">${escapeHtml(c.nombre)}</h2></div>
           <p class="hint">${sillas.length} sillas numeradas · valor $0 · ${ocupadas.length} asignadas / ${libres.length} disponibles</p>
+          <p class="hint">Los tickets de patrocinio solo se identifican por nombre (sin cédula/correo) y únicamente el admin puede generarlos desde esta pestaña.</p>
+          <div class="row" style="align-items:flex-end; gap:10px; flex-wrap:wrap;">
+            <div class="field" style="flex:2; min-width:220px;">
+              <label>Nombre por defecto del bloque</label>
+              <input id="patroDefault-${c.id}" value="${escapeHtml(c.nombre)}" placeholder="Nombre a usar si no escribes uno por silla">
+            </div>
+            ${libres.length ? `<button class="btn btn-primary" onclick="AdminApp.generarBloquePatrocinador('${c.id}')">🎟️ Generar todo el bloque y descargar PDF</button>` : ''}
+            ${ocupadas.length ? `<button class="btn" onclick="AdminApp.descargarPdfBloque('${c.id}')">⬇️ Descargar PDF del bloque</button>` : ''}
+          </div>
           <div class="table-wrap"><table><thead><tr><th>Silla</th><th>Estado</th><th>Asignar a</th><th></th></tr></thead>
           <tbody>
             ${sillas.map(a=>`
               <tr>
                 <td>${escapeHtml(a.numero)}</td>
                 <td>${a.ocupado?'Asignada':'Libre'}</td>
-                <td>${a.ocupado?'—':`<input id="patroNom-${a.id}" placeholder="Nombre del patrocinador/invitado" style="min-width:180px;">`}</td>
+                <td>${a.ocupado?'—':`<input id="patroNom-${a.id}" placeholder="Nombre (opcional, usa el del bloque si se deja vacío)" style="min-width:180px;">`}</td>
                 <td>${a.ocupado?'':`<button class="btn btn-sm btn-primary" onclick="AdminApp.generarTicketPatrocinador('${c.id}','${a.id}')">Generar ticket</button>`}</td>
               </tr>`).join('')}
           </tbody></table></div>
@@ -2995,10 +3004,19 @@ const AdminApp = {
     toast('Ubicación creada: '+nombre+' ('+cantidad+' sillas numeradas)');
     this.renderPatrocinadores();
   },
+  // Nombre a usar para un ticket de patrocinio: el que se escribió en la silla,
+  // o si se dejó vacío, el "nombre por defecto del bloque" (que por defecto trae
+  // el nombre del propio palco/bloque). Así el admin puede generar tickets sin
+  // tener que escribir un nombre distinto para cada silla.
+  nombrePatrocinioPorDefecto(catId){
+    const defInput = document.getElementById('patroDefault-'+catId);
+    if(defInput && defInput.value.trim()) return defInput.value.trim();
+    const cat = ((this.evento.mapa && this.evento.mapa.categorias) || []).find(c=>c.id===catId);
+    return cat ? cat.nombre : 'Patrocinador';
+  },
   async generarTicketPatrocinador(catId, asientoId){
     const input = document.getElementById('patroNom-'+asientoId);
-    const nombre = input ? input.value.trim() : '';
-    if(!nombre){ toast('Escribe a nombre de quién va la silla', true); return; }
+    const nombre = (input && input.value.trim()) || this.nombrePatrocinioPorDefecto(catId);
     const cat = ((this.evento.mapa && this.evento.mapa.categorias) || []).find(c=>c.id===catId);
     const {data: aRows} = await sb.from('asientos').select('*').eq('id', asientoId).limit(1);
     const asiento = aRows && aRows[0];
@@ -3022,6 +3040,95 @@ const AdminApp = {
     toast('Ticket de cortesía generado para '+nombre);
     if(this.evento) this.tickets = await DB.ticketsByEvento(this.evento.id);
     this.renderPatrocinadores();
+  },
+  // Genera de una sola vez un ticket de cortesía para TODAS las sillas libres
+  // de un bloque de patrocinio (usando el nombre escrito en cada silla, o si
+  // está vacío, el nombre por defecto del bloque) y descarga un PDF con todos
+  // los tickets generados, cada uno con su propio código QR.
+  async generarBloquePatrocinador(catId){
+    if(!this.evento){ toast('Selecciona un evento primero', true); return; }
+    const cat = ((this.evento.mapa && this.evento.mapa.categorias) || []).find(c=>c.id===catId);
+    const nombreDefecto = this.nombrePatrocinioPorDefecto(catId);
+    const asientos = (await Seats.all(this.evento.id)).filter(a=>a.zona===catId && !a.ocupado)
+      .sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
+    if(!asientos.length){ toast('No quedan sillas libres en este bloque', true); return; }
+    if(!confirm('Vas a generar '+asientos.length+' ticket(s) de cortesía para el bloque "'+(cat?cat.nombre:'')+'". Esta acción solo la puede hacer el admin. ¿Continuar?')) return;
+    const rows = asientos.map(a=>{
+      const input = document.getElementById('patroNom-'+a.id);
+      const nombre = (input && input.value.trim()) || nombreDefecto;
+      return {
+        evento_id: this.evento.id,
+        codigo: genCode('TK'),
+        codigo_validacion: genCode('VAL'),
+        categoria: cat ? cat.nombre : 'Patrocinador',
+        ubicacion_tipo: catId,
+        ubicacion_detalle: a.numero,
+        precio: 0,
+        nombre_cliente: nombre,
+        tipo_pago: 'cortesia',
+        vt_usuario: 'Patrocinio',
+        estado: 'vendido',
+        _asiento_id: a.id
+      };
+    });
+    const insertRows = rows.map(({_asiento_id, ...r})=>r);
+    const {data: created, error} = await sb.from('tickets').insert(insertRows).select();
+    if(error){ toast('Error generando los tickets del bloque: '+error.message, true); return; }
+    await Promise.all(created.map((t,i)=> sb.from('asientos').update({ocupado:true, ticket_id:t.id}).eq('id', rows[i]._asiento_id)));
+    toast(created.length+' ticket(s) de cortesía generados para "'+(cat?cat.nombre:'Patrocinador')+'"');
+    if(this.evento) this.tickets = await DB.ticketsByEvento(this.evento.id);
+    this.renderPatrocinadores();
+    try{ await this.descargarPdfTicketsPatrocinio(cat, created); }
+    catch(e){ console.error(e); toast('Los tickets quedaron generados, pero no se pudo generar el PDF: '+(e.message||e), true); }
+  },
+  // Descarga el PDF de todos los tickets ya asignados de un bloque de
+  // patrocinio (por si se necesita reimprimir después de generarlos).
+  async descargarPdfBloque(catId){
+    if(!this.evento) return;
+    const cat = ((this.evento.mapa && this.evento.mapa.categorias) || []).find(c=>c.id===catId);
+    const {data, error} = await sb.from('tickets').select('*').eq('evento_id', this.evento.id).eq('ubicacion_tipo', catId).order('ubicacion_detalle', {ascending:true});
+    if(error || !data || !data.length){ toast('No hay tickets generados en este bloque todavía', true); return; }
+    try{ await this.descargarPdfTicketsPatrocinio(cat, data); }
+    catch(e){ console.error(e); toast('No se pudo generar el PDF: '+(e.message||e), true); }
+  },
+  // Arma un PDF tamaño carta con una tarjeta por ticket (categoría, nombre,
+  // silla, código y su QR) y lo descarga. Reutilizable tanto al generar un
+  // bloque completo como al reimprimir uno ya existente.
+  async descargarPdfTicketsPatrocinio(cat, tickets){
+    NetworkActivity.begin();
+    try{
+      await loadJsPdfLib();
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({unit:'mm', format:'letter'});
+      const pageW = 215.9, pageH = 279.4, margin = 10;
+      const cardW = pageW - margin*2, cardH = 45, qrSize = 34, gap = 5;
+      const perPage = Math.floor((pageH - margin*2) / (cardH + gap));
+      let idx = 0;
+      for(const t of tickets){
+        const posInPage = idx % perPage;
+        if(idx>0 && posInPage===0) doc.addPage();
+        const y = margin + posInPage*(cardH+gap);
+        doc.setDrawColor(180,170,220); doc.roundedRect(margin, y, cardW, cardH, 2, 2);
+        const qrUrl = JSON.stringify({codigo:t.codigo, evento:t.evento_id});
+        const qrData = await getQrDataUrl(qrUrl, 220);
+        if(qrData) doc.addImage(qrData, 'PNG', margin+4, y+5, qrSize, qrSize);
+        const tx = margin + 4 + qrSize + 8;
+        doc.setFont('helvetica','bold'); doc.setFontSize(13);
+        doc.text('Cashless Colombia · Ticket de cortesía', tx, y+8);
+        doc.setFont('helvetica','normal'); doc.setFontSize(10);
+        doc.text('Bloque: '+(cat?cat.nombre:(t.categoria||'')), tx, y+15);
+        doc.text('Invitado: '+(t.nombre_cliente||''), tx, y+21);
+        doc.text('Silla: '+(t.ubicacion_detalle||''), tx, y+27);
+        doc.setFont('helvetica','bold'); doc.setFontSize(9);
+        doc.text('Código: '+(t.codigo||''), tx, y+34);
+        if(t.codigo_validacion) doc.text('Val: '+t.codigo_validacion, tx, y+40);
+        idx++;
+      }
+      doc.save('patrocinio_'+(cat?cat.nombre.replace(/[^a-z0-9]+/gi,'_'):'bloque')+'.pdf');
+      toast('PDF generado con '+tickets.length+' ticket(s)');
+    } finally {
+      NetworkActivity.end();
+    }
   },
   async setEventoActivo(evento){
     this.evento = evento;
