@@ -450,6 +450,66 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .map-zone.editable.dragging{cursor:grabbing; z-index:80; box-shadow:0 0 0 2px var(--cyan), 0 10px 28px rgba(0,0,0,.55);}
 .map-zone.editable .zhandle::before{content:"⠿ "; opacity:.7;}
 .map-zone .zgrid{display:grid; gap:2.5px; padding:3px;}
+.map-zone .zhandle{position:relative;}
+.map-zone .zrename{margin-left:5px; opacity:.55; cursor:pointer; font-size:9px;}
+.map-zone .zrename:hover{opacity:1;}
+
+/* ---------- decorative 3D map objects (muros, árboles, casas, grupos) ---------- */
+.map-objects-toolbar{display:flex; gap:6px; flex-wrap:wrap; justify-content:center; max-width:640px; margin:0 auto 10px;}
+.map-objects-toolbar .hint2{width:100%; text-align:center; margin:0 0 2px; font-size:10.5px; color:var(--text-dim);}
+.map-obj{position:absolute; cursor:grab; touch-action:none; user-select:none;}
+.map-obj.dragging{z-index:95; cursor:grabbing;}
+.map-obj .obj-body{width:100%; height:100%; position:relative; perspective:200px;}
+.map-obj.muro .obj-muro{
+  width:100%; height:100%; border-radius:2px;
+  background:linear-gradient(180deg,#9a9fac 0%, #6b6f7a 45%, #34363d 100%);
+  box-shadow:inset 0 3px 0 rgba(255,255,255,.35), inset 0 -5px 7px rgba(0,0,0,.55), 0 6px 10px -2px rgba(0,0,0,.6);
+  border:1px solid #1c1d22; transform:rotateX(8deg);
+}
+.map-obj.arbol .obj-arbol{width:100%; height:100%; position:relative;}
+.map-obj.arbol .obj-copa{
+  position:absolute; left:50%; top:0; width:100%; height:70%; transform:translateX(-50%);
+  border-radius:50%; background:radial-gradient(circle at 35% 28%, #a2f27c, #3a8f3a 65%, #1c4d1c 100%);
+  box-shadow:0 5px 9px -2px rgba(0,0,0,.55), inset -5px -7px 10px rgba(0,0,0,.35);
+}
+.map-obj.arbol .obj-tronco{
+  position:absolute; left:50%; bottom:0; width:24%; height:36%; transform:translateX(-50%);
+  background:linear-gradient(180deg,#a06b3e,#5c3a1e); border-radius:1px; box-shadow:inset -2px 0 3px rgba(0,0,0,.4);
+}
+.map-obj.casa .obj-casa{width:100%; height:100%; position:relative;}
+.map-obj.casa .obj-techo{
+  position:absolute; top:0; left:0; width:100%; height:44%;
+  clip-path:polygon(50% 0%, 100% 100%, 0% 100%);
+  background:linear-gradient(160deg,#ff8a75,#a13a30 90%); box-shadow:0 3px 5px -1px rgba(0,0,0,.55);
+}
+.map-obj.casa .obj-pared{
+  position:absolute; bottom:0; left:7%; width:86%; height:60%;
+  background:linear-gradient(180deg,#f0e2b8,#c9b382); border:1px solid #7a6a44;
+  box-shadow:inset 0 -7px 9px rgba(0,0,0,.28), inset 0 3px 0 rgba(255,255,255,.4);
+}
+.map-obj.grupo .obj-grupo{
+  width:100%; height:100%; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:3px; padding:3px;
+  background:rgba(157,110,255,.06); border:1px dashed var(--line-soft); border-radius:4px;
+}
+.map-obj.grupo .obj-grupo span{
+  display:block; border-radius:2px;
+  background:linear-gradient(160deg,#b79bff,#5a3fae 85%);
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.3), inset 0 -3px 5px rgba(0,0,0,.4), 0 3px 5px -1px rgba(0,0,0,.5);
+}
+.map-obj .obj-label{
+  position:absolute; left:-10px; right:-10px; bottom:-13px; text-align:center; font-size:8px;
+  color:var(--text-dim); white-space:nowrap; font-family:'Rajdhani',sans-serif; letter-spacing:.04em;
+}
+.map-obj .obj-del{
+  position:absolute; top:-8px; right:-8px; width:15px; height:15px; border-radius:50%; background:var(--bad);
+  color:#fff; font-size:9px; line-height:15px; text-align:center; cursor:pointer; display:none;
+  box-shadow:0 0 6px rgba(255,61,110,.7); z-index:6;
+}
+.map-obj .obj-resize{
+  position:absolute; right:-4px; bottom:-4px; width:10px; height:10px; background:var(--cyan); border-radius:2px;
+  cursor:nwse-resize; display:none; z-index:6; box-shadow:0 0 5px rgba(0,240,255,.7);
+}
+.map-obj.editable:hover .obj-del, .map-obj.editable:hover .obj-resize{display:block;}
 .seat{
   width:16px; height:16px; border-radius:4px; background:#211539; border:1px solid var(--line); cursor:default; transition:.15s;
 }
@@ -1682,6 +1742,8 @@ const MapView = {
     const evento = eventoRows && eventoRows[0];
     const mapa = (evento && evento.mapa) || {};
     const layout = {...(mapa.layout || {})};
+    const nombresMap = mapa.nombres || {};
+    const objetos = (mapa.objetos || []).map(o=>({...o}));
 
     const palcos = {}; let vipTaken=0, vipTotal=0, generalTaken=0, generalTotal=0;
     const vipSeats = [];
@@ -1702,20 +1764,30 @@ const MapView = {
     const palcoKeys = Object.keys(palcos).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
 
     // ---- build zone definitions (key, label, cols, rows, seat list) ----
+    // Cada zona guarda además "baseLabel" (el nombre editable, sin el conteo de
+    // ocupación) para poder ofrecer el botón de renombrar en modo editor.
     const zones = [];
     palcoKeys.forEach(p=>{
       const seats = palcos[p].sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
-      zones.push({key:'P_'+p, label:p, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'palco'});
+      const zkey = 'P_'+p;
+      const base = nombresMap[zkey] || p;
+      zones.push({key:zkey, label:base, baseLabel:base, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'palco'});
     });
-    zones.push({
-      key:'VIP', label:`ZONA VIP (${vipTaken}/${vipTotal})`, cols:10, rows:Math.max(1,Math.ceil(vipTotal/10)),
-      seats:vipSeats, kind:'vip', empty: vipTotal===0
-    });
+    {
+      const base = nombresMap['VIP'] || 'Zona VIP';
+      zones.push({
+        key:'VIP', label:`${base.toUpperCase()} (${vipTaken}/${vipTotal})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(vipTotal/10)),
+        seats:vipSeats, kind:'vip', empty: vipTotal===0
+      });
+    }
     const generalSeats = Array.from({length:Math.min(generalTotal,120)}).map((_,i)=> asientos.find(a=>a.zona==='general' && a.numero===`G${i+1}`)).filter(Boolean);
-    zones.push({
-      key:'GENERAL', label:`GENERAL (${generalTaken}/${generalTotal})`, cols:12, rows:Math.max(1,Math.ceil(generalSeats.length/12)),
-      seats:generalSeats, kind:'general', empty: generalTotal===0
-    });
+    {
+      const base = nombresMap['GENERAL'] || 'General';
+      zones.push({
+        key:'GENERAL', label:`${base.toUpperCase()} (${generalTaken}/${generalTotal})`, baseLabel:base, cols:12, rows:Math.max(1,Math.ceil(generalSeats.length/12)),
+        seats:generalSeats, kind:'general', empty: generalTotal===0
+      });
+    }
     // Categorías personalizadas: numeradas se dibujan como grilla individual (tipo VIP);
     // no numeradas como zona agrupada (tipo General).
     const categoriasPersonalizadas = mapa.categorias || [];
@@ -1726,12 +1798,13 @@ const MapView = {
       const total = seatsCat.length;
       const zkey = 'CAT_'+c.id;
       customZoneKeys.push(zkey);
+      const base = nombresMap[zkey] || c.nombre || 'Categoría';
       if(c.numerada){
         const sorted = seatsCat.slice().sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
-        zones.push({key:zkey, label:`${(c.nombre||'CATEGORÍA').toUpperCase()} (${taken}/${total})`, cols:10, rows:Math.max(1,Math.ceil(total/10)), seats:sorted, kind:'custom', customLabel:c.nombre, empty: total===0});
+        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(total/10)), seats:sorted, kind:'custom', customLabel:base, empty: total===0});
       } else {
         const pooled = seatsCat.slice(0, Math.min(total,120));
-        zones.push({key:zkey, label:`${(c.nombre||'CATEGORÍA').toUpperCase()} (${taken}/${total})`, cols:12, rows:Math.max(1,Math.ceil(pooled.length/12)), seats:pooled, kind:'custom', customLabel:c.nombre, empty: total===0});
+        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:12, rows:Math.max(1,Math.ceil(pooled.length/12)), seats:pooled, kind:'custom', customLabel:base, empty: total===0});
       }
     });
 
@@ -1754,7 +1827,15 @@ const MapView = {
     });
 
     zones.forEach(z=>{ z.pos = layout[z.key] || defaultPos[z.key]; });
-    const canvasH = Math.max(cursorY, stagePos.y+stageH+10) + 4;
+    let canvasH = Math.max(cursorY, stagePos.y+stageH+10) + 4;
+    let canvasWfinal = canvasW;
+    // Los objetos decorativos (muros, árboles, casas, grupos) pueden colocarse
+    // en cualquier punto del plano; si se salen del área por defecto, el
+    // canvas crece para que sigan siendo visibles y arrastrables.
+    objetos.forEach(o=>{
+      canvasH = Math.max(canvasH, o.y + o.h + 24);
+      canvasWfinal = Math.max(canvasWfinal, o.x + o.w + 24);
+    });
 
     // ---- render HTML ----
     const seatEl = (s, extraTitle)=>{
@@ -1767,26 +1848,50 @@ const MapView = {
         inner = `<div class="hint" style="grid-column:1/-1; font-size:10px; padding:2px 4px;">Sin puestos</div>`;
       } else {
         inner = z.seats.map(s=>{
-          const zoneName = z.kind==='vip'?'VIP':(z.kind==='general'?'General':(z.kind==='custom'?z.customLabel:z.label));
+          const zoneName = z.kind==='vip'?z.baseLabel:(z.kind==='general'?z.baseLabel:(z.kind==='custom'?z.customLabel:z.label));
           const info = z.kind==='palco' ? `${z.label} · Silla ${s.numero.split('-')[1]||s.numero}` : `${zoneName} · ${s.numero}`;
           return seatEl(s, info);
         }).join('');
       }
+      const renameBtn = editable ? `<span class="zrename" data-current="${escapeHtml(z.baseLabel||z.label)}" title="Renombrar esta ubicación">✏️</span>` : '';
       return `<div class="map-zone ${editable?'editable':''}" data-key="${z.key}" style="left:${z.pos.x}px; top:${z.pos.y}px; width:${z.w}px;">
-        <div class="zhandle" data-zone-label="${escapeHtml(z.label)}">${escapeHtml(z.label)}</div>
+        <div class="zhandle" data-zone-label="${escapeHtml(z.label)}">${escapeHtml(z.label)}${renameBtn}</div>
         <div class="zgrid" style="grid-template-columns:repeat(${z.cols},1fr);">${inner}</div>
       </div>`;
     }).join('');
+
+    // ---- objetos decorativos: muros, árboles, casas, grupos de objetos ----
+    const objBodyHtml = (o)=>{
+      if(o.tipo==='muro') return `<div class="obj-body"><div class="obj-muro"></div></div>`;
+      if(o.tipo==='arbol') return `<div class="obj-body obj-arbol"><div class="obj-copa"></div><div class="obj-tronco"></div></div>`;
+      if(o.tipo==='casa') return `<div class="obj-body obj-casa"><div class="obj-techo"></div><div class="obj-pared"></div></div>`;
+      return `<div class="obj-body"><div class="obj-grupo"><span></span><span></span><span></span><span></span></div></div>`;
+    };
+    const objetosHtml = objetos.map(o=>`
+      <div class="map-obj ${o.tipo} ${editable?'editable':''}" data-obj-id="${o.id}" style="left:${o.x}px; top:${o.y}px; width:${o.w}px; height:${o.h}px;">
+        ${objBodyHtml(o)}
+        ${o.label ? `<div class="obj-label">${escapeHtml(o.label)}</div>` : ''}
+        ${editable ? `<div class="obj-del" title="Eliminar">✕</div><div class="obj-resize" title="Arrastra para redimensionar"></div>` : ''}
+      </div>`).join('');
 
     container.innerHTML = `
       <div class="map-canvas-toolbar">
         <p class="hint">${editable ? 'Editor de mapa' : 'Mapa del evento'}</p>
         ${editable ? `<div style="display:flex; gap:8px;"><button class="btn btn-sm" id="mapResetBtn">Restablecer orden</button></div>` : ''}
       </div>
+      ${editable ? `
+      <div class="map-objects-toolbar" id="mapObjToolbar">
+        <p class="hint2">Objetos del plano (arrástralos, redimensiona por la esquina, ✕ para borrar):</p>
+        <button class="btn btn-sm" type="button" data-tipo="muro">➕ Muro</button>
+        <button class="btn btn-sm" type="button" data-tipo="arbol">➕ Árbol</button>
+        <button class="btn btn-sm" type="button" data-tipo="casa">➕ Casa</button>
+        <button class="btn btn-sm" type="button" data-tipo="grupo">➕ Grupo de objetos</button>
+      </div>` : ''}
       <div class="map-canvas-wrap">
-        <div class="map-canvas" id="mapCanvasEl" style="width:${canvasW}px; height:${canvasH}px;">
+        <div class="map-canvas" id="mapCanvasEl" style="width:${canvasWfinal}px; height:${canvasH}px;">
           <div class="map-stage ${editable?'editable-drag':''}" style="left:${stagePos.x}px; top:${stagePos.y}px; width:${stageW}px; height:${stageH}px; font-size:13px;">ESCENARIO</div>
           ${zonesHtml}
+          ${objetosHtml}
         </div>
         <div class="map-legend">
           <div class="lg"><span class="seat free" style="width:11px;height:11px;"></span> Disponible</div>
@@ -1897,6 +2002,136 @@ const MapView = {
       await MapView.saveLayout(eventoId, evento, currentLayout);
       MapView.render(container, eventoId, myTicket, opts);
     });
+
+    // ---- renombrar palcos/ubicaciones directamente desde el mapa ----
+    container.querySelectorAll('.map-zone.editable .zrename').forEach(span=>{
+      span.addEventListener('pointerdown', e=> e.stopPropagation());
+      span.addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        const zoneEl = span.closest('.map-zone');
+        const key = zoneEl.dataset.key;
+        const actual = span.dataset.current || '';
+        const nuevo = prompt('Nuevo nombre para esta ubicación:', actual);
+        if(nuevo===null) return;
+        const nombre = nuevo.trim();
+        if(!nombre) return;
+        await MapView.renameZone(eventoId, evento, key, nombre);
+        MapView.render(container, eventoId, myTicket, opts);
+      });
+    });
+
+    // ---- objetos decorativos: agregar desde la barra de herramientas ----
+    let currentObjetos = objetos.map(o=>({...o}));
+    const objToolbar = document.getElementById('mapObjToolbar');
+    if(objToolbar){
+      objToolbar.querySelectorAll('button[data-tipo]').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          currentObjetos.push(MapView.newObjeto(btn.dataset.tipo));
+          await MapView.saveObjetos(eventoId, evento, currentObjetos);
+          MapView.render(container, eventoId, myTicket, opts);
+        });
+      });
+    }
+
+    // ---- objetos decorativos: arrastrar, redimensionar y borrar ----
+    container.querySelectorAll('.map-obj.editable').forEach(objEl=>{
+      const objId = objEl.dataset.objId;
+      let offXo = 0, offYo = 0, resizing = false, startW = 0, startH = 0, startX = 0, startY = 0;
+
+      objEl.addEventListener('pointerdown', e=>{
+        if(e.target.closest('.obj-del') || e.target.closest('.obj-resize')) return;
+        e.preventDefault();
+        dragEl = objEl; dragKey = null;
+        const canvasRect = canvasEl.getBoundingClientRect();
+        offXo = e.clientX - canvasRect.left - parseFloat(objEl.style.left);
+        offYo = e.clientY - canvasRect.top - parseFloat(objEl.style.top);
+        objEl.classList.add('dragging');
+        objEl.setPointerCapture(e.pointerId);
+      });
+      objEl.addEventListener('pointermove', e=>{
+        if(dragEl!==objEl || resizing) return;
+        const canvasRect = canvasEl.getBoundingClientRect();
+        let nx = Math.max(0, e.clientX - canvasRect.left - offXo);
+        let ny = Math.max(0, e.clientY - canvasRect.top - offYo);
+        objEl.style.left = nx + 'px'; objEl.style.top = ny + 'px';
+        if(ny + objEl.offsetHeight + 24 > canvasEl.offsetHeight) canvasEl.style.height = (ny + objEl.offsetHeight + 24) + 'px';
+        if(nx + objEl.offsetWidth + 24 > canvasEl.offsetWidth) canvasEl.style.width = (nx + objEl.offsetWidth + 24) + 'px';
+      });
+      const finishObjDrag = async ()=>{
+        if(dragEl!==objEl) return;
+        const x = Math.round(parseFloat(objEl.style.left));
+        const y = Math.round(parseFloat(objEl.style.top));
+        const o = currentObjetos.find(oo=>oo.id===objId);
+        if(o){ o.x = x; o.y = y; }
+        objEl.classList.remove('dragging');
+        dragEl = null;
+        await MapView.saveObjetos(eventoId, evento, currentObjetos);
+      };
+      objEl.addEventListener('pointerup', finishObjDrag);
+      objEl.addEventListener('pointercancel', finishObjDrag);
+
+      const delBtn = objEl.querySelector('.obj-del');
+      if(delBtn) delBtn.addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        currentObjetos = currentObjetos.filter(oo=>oo.id!==objId);
+        await MapView.saveObjetos(eventoId, evento, currentObjetos);
+        MapView.render(container, eventoId, myTicket, opts);
+      });
+
+      const resizeHandle = objEl.querySelector('.obj-resize');
+      if(resizeHandle){
+        resizeHandle.addEventListener('pointerdown', e=>{
+          e.preventDefault(); e.stopPropagation();
+          resizing = true; dragEl = objEl;
+          startW = objEl.offsetWidth; startH = objEl.offsetHeight;
+          startX = e.clientX; startY = e.clientY;
+          resizeHandle.setPointerCapture(e.pointerId);
+        });
+        resizeHandle.addEventListener('pointermove', e=>{
+          if(!resizing) return;
+          const nw = Math.max(16, startW + (e.clientX - startX));
+          const nh = Math.max(12, startH + (e.clientY - startY));
+          objEl.style.width = nw + 'px'; objEl.style.height = nh + 'px';
+        });
+        const finishResize = async ()=>{
+          if(!resizing) return;
+          resizing = false; dragEl = null;
+          const o = currentObjetos.find(oo=>oo.id===objId);
+          if(o){ o.w = Math.round(objEl.offsetWidth); o.h = Math.round(objEl.offsetHeight); }
+          await MapView.saveObjetos(eventoId, evento, currentObjetos);
+        };
+        resizeHandle.addEventListener('pointerup', finishResize);
+        resizeHandle.addEventListener('pointercancel', finishResize);
+      }
+    });
+  },
+
+  // Crea un objeto decorativo nuevo (muro, árbol, casa o grupo de objetos)
+  // con un tamaño por defecto razonable para el plano 3D.
+  newObjeto(tipo){
+    const defaults = {muro:{w:90,h:14}, arbol:{w:28,h:34}, casa:{w:48,h:44}, grupo:{w:76,h:56}};
+    const d = defaults[tipo] || {w:40,h:40};
+    return {id:'obj'+Math.random().toString(36).slice(2,8), tipo, x:14, y:14, w:d.w, h:d.h};
+  },
+
+  async saveObjetos(eventoId, evento, objetos){
+    const nuevoMapa = {...(evento.mapa||{}), objetos};
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo guardar el objeto del plano', true); return; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
+  },
+
+  // Guarda un nombre personalizado para un palco/zona/categoría del mapa
+  // (identificado por su "key" interna, ej. "P_P1", "VIP", "CAT_cat123").
+  async renameZone(eventoId, evento, key, nombre){
+    const nombres = {...((evento.mapa&&evento.mapa.nombres)||{}), [key]: nombre};
+    const nuevoMapa = {...(evento.mapa||{}), nombres};
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo renombrar', true); return; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
+    toast('Nombre actualizado');
   },
 
   async saveLayout(eventoId, evento, layout){
@@ -3092,6 +3327,12 @@ const AdminApp = {
     toast('Categorías y servicio guardados');
     this.catRender(eventId);
   },
+  // Guarda TODO lo del panel "Ajustar palcos/VIP" en un solo paso: cantidades
+  // de palcos/VIP/general Y las categorías/servicio del sub-panel (si el admin
+  // lo abrió), para que un solo clic en "Guardar y actualizar mapa" sea
+  // suficiente y las categorías nuevas SIEMPRE queden creadas en el mapa del
+  // evento (antes era fácil olvidar el botón separado "Guardar categorías y
+  // servicio" y las categorías quedaban solo en memoria, sin sillas creadas).
   async guardarMapa(id){
     const evento = this.eventos.find(e=>e.id===id);
     if(!evento) return;
@@ -3110,12 +3351,37 @@ const AdminApp = {
       toast('No puedes reducir la cantidad de sillas por palco, solo aumentarla', true);
       return;
     }
-    const nuevoMapa = {...mapaActual, palcos, sillasPalco, vip, general};
+    let nuevoMapa = {...mapaActual, palcos, sillasPalco, vip, general};
+
+    // Si el admin abrió el sub-panel de "Categorías y servicio por silla",
+    // sincroniza y valida esos datos también, y los incluye en el mismo guardado.
+    const st = this._catState[id];
+    if(st){
+      this.catSync(id);
+      for(const c of st.categorias){
+        if(!c.nombre || !c.nombre.trim()){ toast('Todas las categorías necesitan un nombre', true); return; }
+        if(c._persisted && c.cantidad < c._cantidadOriginal){
+          toast('La cantidad de "'+c.nombre+'" no puede ser menor a '+c._cantidadOriginal, true);
+          return;
+        }
+      }
+      const categorias = st.categorias.map(c=>({
+        id:c.id, nombre:c.nombre.trim(), precio:c.precio, numerada:c.numerada, cantidad:c.cantidad,
+        servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0}
+      }));
+      const servicios = {
+        palco: {activo:st.palco.activo, nombre:st.palco.nombre, valor:st.palco.valor},
+        vip: {activo:st.vip.activo, nombre:st.vip.nombre, valor:st.vip.valor}
+      };
+      nuevoMapa = {...nuevoMapa, servicios, categorias};
+    }
+
     const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', id);
     if(error){ toast('Error actualizando el evento: '+error.message, true); console.error(error); return; }
     evento.mapa = nuevoMapa;
     if(this.evento && this.evento.id===id) this.evento.mapa = nuevoMapa;
     await Seats.growToMapa(evento);
+    if(st) st.categorias.forEach(c=>{ c._persisted = true; c._cantidadOriginal = c.cantidad; });
     toast('Mapa actualizado: '+palcos+' palcos ('+sillasPalco+' sillas c/u), '+vip+' VIP, '+general+' general');
     this.renderEventos();
   },
