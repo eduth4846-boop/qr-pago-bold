@@ -1658,7 +1658,7 @@ const MapView = {
     // ---- render HTML ----
     const seatEl = (s, extraTitle)=>{
       const cls = s.numero===myNum ? 'you' : (s.ocupado?'taken':'free');
-      return `<div class="seat ${cls}" data-num="${s.numero}" data-info="${escapeHtml(extraTitle)}"></div>`;
+      return `<div class="seat ${cls}" data-num="${s.numero}" data-id="${s.id}" data-info="${escapeHtml(extraTitle)}"></div>`;
     };
     const zonesHtml = zones.map(z=>{
       let inner;
@@ -1700,6 +1700,17 @@ const MapView = {
       el.addEventListener('mousemove', e=> this.moveTip(e));
       el.addEventListener('mouseleave', ()=> this.hideTip());
     });
+
+    // ---- modo compra: tocar una ubicación disponible la selecciona al instante ----
+    if(opts.buyable){
+      container.querySelectorAll('.seat.free[data-id]').forEach(el=>{
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', ()=>{
+          const asientoClic = asientos.find(a=>a.id===el.dataset.id);
+          if(asientoClic && typeof opts.onSeatClick==='function') opts.onSeatClick(asientoClic);
+        });
+      });
+    }
 
     if(!editable) return;
 
@@ -2127,7 +2138,7 @@ const UsuarioApp = {
         </div>
       </div>
       <div class="card" id="cmpMisSolicitudes" style="margin-top:16px;"></div>`;
-    MapView.render(document.getElementById('cmpMapa'), evento.id, null, {editable:false});
+    MapView.render(document.getElementById('cmpMapa'), evento.id, null, {editable:false, buyable:true, onSeatClick:(a)=>UsuarioApp.seatMapClick(a)});
     this.renderListaAsientos(asientos);
     this.cargarMisSolicitudes();
   },
@@ -2152,18 +2163,39 @@ const UsuarioApp = {
     const asiento = this.compra.asientos.find(a=>a.id===asientoId);
     if(!asiento) return;
     const item = document.getElementById('bi-'+asientoId);
+    const checkbox = item ? item.querySelector('input[type="checkbox"]') : null;
+    let nowSelected;
     if(this.compra.seleccion[asientoId]){
       delete this.compra.seleccion[asientoId];
       if(item) item.classList.remove('selected');
+      nowSelected = false;
     } else {
       this.compra.seleccion[asientoId] = {asiento, precio};
       if(item) item.classList.add('selected');
+      nowSelected = true;
     }
+    if(checkbox) checkbox.checked = nowSelected;
     // Marca/desmarca de inmediato la ubicación en el mapa del evento, sin
     // tener que volver a cargar todo el mapa desde la base de datos.
     const mapaEl = document.querySelector(`#cmpMapa .seat[data-num="${(window.CSS&&CSS.escape)?CSS.escape(asiento.numero):asiento.numero}"]`);
-    if(mapaEl) mapaEl.classList.toggle('selected', !!this.compra.seleccion[asientoId]);
+    if(mapaEl) mapaEl.classList.toggle('selected', nowSelected);
     this.actualizarTotalesCompra();
+    // Al tocar una ubicación (en el mapa o en la lista) se abre de inmediato
+    // la ventana con las opciones de pago (Bold o transferencia + comprobante).
+    // Si ya está abierta, solo se actualiza el resumen y el total.
+    if(Object.keys(this.compra.seleccion).length>0){
+      this.abrirPago();
+    } else {
+      const modalAbierto = document.getElementById('pagoModal');
+      if(modalAbierto) modalAbierto.remove();
+    }
+    return nowSelected;
+  },
+  // Se dispara al tocar una ubicación libre directamente en el mapa del evento.
+  seatMapClick(asiento){
+    const evento = this.compra.evento;
+    const precioBase = CategoriaServicio.precioBase(evento, asiento.zona);
+    this.toggleSeat(asiento.id, precioBase);
   },
   // Recalcula cantidad, valor de servicio y total a pagar según la selección
   // actual, aplicando la configuración de "Servicio" del evento.
@@ -2190,13 +2222,30 @@ const UsuarioApp = {
     const pago_link = this.compra.evento.mapa && this.compra.evento.mapa.pago_link;
     const resumen = items.map(x=>`${escapeHtml(this.seatLabel(x.asiento))} — ${money(x.precio + CategoriaServicio.valorServicio(this.compra.evento, x.asiento.zona))}`).join('<br>');
     const servicioLinea = servicioTotal>0 ? `<div class="hint" style="margin-bottom:10px;">Incluye servicio: ${money(servicioTotal)}</div>` : '';
+    // Si la ventana de pago ya está abierta (el cliente tocó otra ubicación
+    // en el mapa mientras la tenía abierta), solo se actualiza el resumen y
+    // el total, para no perder un comprobante que ya haya adjuntado.
+    const existente = document.getElementById('pagoModal');
+    if(existente){
+      const resumenEl = existente.querySelector('[data-pago-resumen]');
+      if(resumenEl) resumenEl.innerHTML = resumen;
+      const servicioEl = existente.querySelector('[data-pago-servicio]');
+      if(servicioEl) servicioEl.innerHTML = servicioLinea;
+      const totalEl = existente.querySelector('[data-pago-total]');
+      if(totalEl) totalEl.textContent = money(total);
+      const boldBtn = document.getElementById('boldPagarBtn');
+      if(boldBtn) boldBtn.setAttribute('onclick', `UsuarioApp.pagarConBold(${total})`);
+      const enviarBtn = document.getElementById('pagoEnviarBtn');
+      if(enviarBtn) enviarBtn.setAttribute('onclick', `UsuarioApp.enviarComprobante(${total})`);
+      return;
+    }
     document.body.insertAdjacentHTML('beforeend', `
       <div class="modal-bg" id="pagoModal">
         <div class="modal">
           <div class="section-title"><h2 style="font-size:19px;">Pagar tickets</h2></div>
-          <div class="hint" style="margin-bottom:10px;">${resumen}</div>
-          ${servicioLinea}
-          <div><b>Total a pagar: <span style="color:var(--lime);">${money(total)}</span></b></div>
+          <div class="hint" style="margin-bottom:10px;" data-pago-resumen>${resumen}</div>
+          <div data-pago-servicio>${servicioLinea}</div>
+          <div><b>Total a pagar: <span style="color:var(--lime);" data-pago-total>${money(total)}</span></b></div>
           <button class="btn btn-primary btn-block" style="margin-top:14px;" id="boldPagarBtn" onclick="UsuarioApp.pagarConBold(${total})">💳 Pagar con Bold (tarjeta, PSE, Nequi)</button>
           <p class="hint" style="text-align:center; margin-top:6px;">Pago 100% seguro procesado por Bold. Tus tickets se generan automáticamente en cuanto el banco confirma el pago.</p>
           <details style="margin-top:16px;">
