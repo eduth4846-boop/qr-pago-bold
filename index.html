@@ -962,6 +962,7 @@ function loadScriptOnce(src){
 const loadQRCodeLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js');
 const loadHtml5QrcodeLib = ()=>loadScriptOnce('https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js');
 const loadExcelJsLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js');
+const loadJsPdfLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
 
 // Id de orden Bold persistido durante el checkout para soportar la redirección.
 function saveBoldOrder(orderId, solicitudId){
@@ -1020,6 +1021,24 @@ async function renderQR(el, text){
   await loadQRCodeLib();
   el.innerHTML='';
   new QRCode(el, {text: text, width:200, height:200, colorDark:'#111014', colorLight:'#ffffff'});
+}
+// Genera un QR y devuelve su imagen como dataURL (PNG), útil para incrustarlo
+// en PDFs o imágenes generadas por canvas. No deja rastro en el DOM visible.
+async function getQrDataUrl(text, size){
+  await loadQRCodeLib();
+  const box = document.createElement('div');
+  box.style.position='absolute'; box.style.left='-9999px';
+  document.body.appendChild(box);
+  new QRCode(box, {text: text, width:size||220, height:size||220, colorDark:'#111014', colorLight:'#ffffff'});
+  await new Promise(res=>setTimeout(res,60));
+  const el = box.querySelector('img') || box.querySelector('canvas');
+  let dataUrl = null;
+  try{
+    if(el && el.tagName==='CANVAS') dataUrl = el.toDataURL('image/png');
+    else if(el && el.tagName==='IMG') dataUrl = el.src;
+  }catch(e){}
+  box.remove();
+  return dataUrl;
 }
 function bellSound(){
   try{
@@ -3968,6 +3987,10 @@ const VTApp = {
       await sb.from('vendedores').update({asignados:(this.identity.asignados||0)+cantidad}).eq('id', this.identity.id);
       this.identity.asignados = (this.identity.asignados||0)+cantidad;
       toast(cantidad+' ticket(s) enviado(s) para aprobación del admin · Total '+money(total));
+      if(tipo_pago==='efectivo'){
+        try{ await this.generarReciboEfectivo(evento, cliente, items, total); }
+        catch(e){ console.error(e); toast('La venta quedó registrada, pero no se pudo generar el recibo PDF: '+(e.message||e), true); }
+      }
       // Queda listo para registrar la venta del siguiente cliente en el mismo evento.
       this.venta.cliente = null;
       this.venta.seleccion = {};
@@ -3975,6 +3998,98 @@ const VTApp = {
     }catch(err){
       toast('Error subiendo el comprobante: '+(err.message||err), true);
       btn.disabled = false; btn.textContent = '🎟️ Enviar venta para aprobación';
+    }
+  },
+  // Genera el recibo de caja en PDF (formato boleta/ticket, 80mm de ancho) cuando
+  // el pago fue en efectivo: consecutivo, datos del evento y del cliente, detalle
+  // de la compra, total, y un QR que abre la ventana de validación de tickets
+  // (pide cédula o correo para ver si el admin ya aprobó la venta).
+  async generarReciboEfectivo(evento, cliente, items, total){
+    NetworkActivity.begin();
+    try{
+      const itemsJson = items.map(x=>({
+        categoria: this.seatLabel(x.asiento), zona: x.asiento.zona, ubicacion: x.asiento.numero,
+        precio: x.precio + CategoriaServicio.valorServicio(evento, x.asiento.zona)
+      }));
+      const {data: recibo, error} = await sb.from('recibos_caja').insert({
+        evento_id: evento.id,
+        vt_usuario: this.identity.usuario,
+        cliente_nombre: cliente.nombre, cliente_cedula: cliente.cedula,
+        cliente_correo: cliente.correo, cliente_telefono: cliente.telefono,
+        items: itemsJson, total, metodo_pago: 'efectivo'
+      }).select();
+      if(error || !recibo || !recibo[0]){ toast('Venta registrada, pero no se pudo generar el consecutivo del recibo: '+(error?error.message:''), true); return; }
+      const consecutivo = String(recibo[0].id).padStart(6,'0');
+
+      await loadJsPdfLib();
+      const qrUrl = `${location.origin}${location.pathname}?validar=1&evento=${evento.id}`;
+      const qrData = await getQrDataUrl(qrUrl, 260);
+
+      const { jsPDF } = window.jspdf;
+      const estimatedHeight = 78 + itemsJson.length*4 + 62;
+      const doc = new jsPDF({unit:'mm', format:[80, Math.max(150, estimatedHeight)]});
+      const cx = 40; let y = 8;
+      doc.setFont('helvetica','bold'); doc.setFontSize(12);
+      doc.text('GLM EVENTOS', cx, y, {align:'center'}); y+=5;
+      doc.setFont('helvetica','normal'); doc.setFontSize(9);
+      doc.text('Recibo de pago en efectivo', cx, y, {align:'center'}); y+=5;
+      doc.line(5,y,75,y); y+=5;
+      doc.setFont('helvetica','bold'); doc.setFontSize(11);
+      doc.text('No. '+consecutivo, cx, y, {align:'center'}); y+=6;
+
+      doc.setFont('helvetica','normal'); doc.setFontSize(8);
+      doc.text('Evento: '+(evento.nombre||''), 5, y); y+=4;
+      if(evento.fecha){ doc.text('Fecha evento: '+evento.fecha+(evento.hora?' · '+evento.hora:''), 5, y); y+=4; }
+      doc.text('Emitido: '+new Date().toLocaleString('es-CO'), 5, y); y+=4;
+      doc.text('Vendedor: '+this.identity.usuario, 5, y); y+=6;
+      doc.line(5,y,75,y); y+=5;
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.text('Cliente', 5, y); y+=4;
+      doc.setFont('helvetica','normal'); doc.setFontSize(8);
+      doc.text('Nombre: '+(cliente.nombre||''), 5, y); y+=4;
+      doc.text('Cédula: '+(cliente.cedula||''), 5, y); y+=4;
+      if(cliente.correo){ doc.text('Correo: '+cliente.correo, 5, y); y+=4; }
+      if(cliente.telefono){ doc.text('Teléfono: '+cliente.telefono, 5, y); y+=4; }
+      y+=1; doc.line(5,y,75,y); y+=5;
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.text('Detalle de la compra', 5, y); y+=4.5;
+      doc.setFont('helvetica','normal'); doc.setFontSize(7.5);
+      itemsJson.forEach(it=>{
+        const lines = doc.splitTextToSize(it.categoria, 48);
+        doc.text(lines, 5, y);
+        doc.text(money(it.precio), 75, y, {align:'right'});
+        y += Math.max(lines.length,1)*3.6;
+      });
+      y+=1; doc.line(5,y,75,y); y+=5;
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(10);
+      doc.text('TOTAL PAGADO', 5, y);
+      doc.text(money(total), 75, y, {align:'right'}); y+=5;
+      doc.setFont('helvetica','normal'); doc.setFontSize(8);
+      doc.text('Método de pago: Efectivo', 5, y); y+=6;
+
+      doc.setFont('helvetica','italic'); doc.setFontSize(7.5);
+      const estadoLines = doc.splitTextToSize('Estado: venta pendiente de aprobación del administrador. Los tickets se generan al aprobarse.', 70);
+      doc.text(estadoLines, 5, y); y += estadoLines.length*3.6 + 4;
+
+      if(qrData){
+        const qrSize = 32;
+        doc.addImage(qrData, 'PNG', cx-qrSize/2, y, qrSize, qrSize);
+        y += qrSize + 3;
+      }
+      doc.setFont('helvetica','normal'); doc.setFontSize(7.3);
+      const qrLines = doc.splitTextToSize('Escanea este código e ingresa tu cédula o correo para validar si tus tickets ya están aprobados y disponibles.', 70);
+      doc.text(qrLines, cx, y, {align:'center'}); y += qrLines.length*3.5 + 5;
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(7.5);
+      doc.text('Conserve este recibo', cx, y, {align:'center'});
+
+      const filename = 'recibo_'+consecutivo+'.pdf';
+      try{ window.open(doc.output('bloburl'), '_blank'); }catch(e){}
+      doc.save(filename);
+      toast('Recibo de caja No. '+consecutivo+' generado para imprimir');
+    } finally {
+      NetworkActivity.end();
     }
   },
   async renderMis(){
@@ -4042,12 +4157,62 @@ const VTApp = {
 };
 
 /* =========================================================
+   VALIDAR TICKETS (ventana emergente desde el QR del recibo de caja)
+   Se abre automáticamente si la URL trae ?validar=1, típicamente al
+   escanear el QR impreso en el recibo de pago en efectivo. Pide cédula
+   o correo y muestra si ya tiene tickets aprobados por el admin.
+========================================================= */
+const ValidarPopup = {
+  eventoId: null,
+  abrir(eventoId){
+    this.eventoId = eventoId || null;
+    if(document.getElementById('validarPopupModal')) return;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="validarPopupModal">
+        <div class="modal" style="max-width:420px;">
+          <div class="section-title"><h2 style="font-size:19px;">Validar mis tickets</h2></div>
+          <p class="hint">Ingresa tu cédula o correo registrado para ver si tus tickets ya están aprobados y disponibles.</p>
+          <div class="field"><label>Cédula o correo</label><input id="validarPopupInput" placeholder="Ej: 1020304050 o correo@ejemplo.com" onkeydown="if(event.key==='Enter')ValidarPopup.consultar()"></div>
+          <button class="btn btn-primary btn-block" onclick="ValidarPopup.consultar()">Consultar</button>
+          <div id="validarPopupResultado" style="margin-top:14px;"></div>
+          <button class="btn btn-sm" style="margin-top:10px;" onclick="document.getElementById('validarPopupModal').remove()">Cerrar</button>
+        </div>
+      </div>`);
+  },
+  async consultar(){
+    const val = document.getElementById('validarPopupInput').value.trim();
+    const box = document.getElementById('validarPopupResultado');
+    if(!val){ toast('Ingresa tu cédula o correo', true); return; }
+    box.innerHTML = `<p class="hint">Consultando…</p>`;
+    let q = sb.from('tickets').select('*').or(`correo.eq.${val},cedula.eq.${val}`).order('created_at',{ascending:true});
+    if(this.eventoId) q = q.eq('evento_id', this.eventoId);
+    const {data, error} = await q;
+    if(error){ box.innerHTML = `<p class="hint">Error consultando: ${escapeHtml(error.message)}</p>`; return; }
+    if(!data || !data.length){
+      box.innerHTML = `<p class="hint">No encontramos tickets con ese dato todavía. Si acabas de pagar en efectivo, tu compra aún puede estar pendiente de aprobación del administrador — intenta de nuevo en unos minutos.</p>`;
+      return;
+    }
+    const aprobados = data.filter(t=>t.estado==='vendido');
+    const anulados = data.filter(t=>t.estado==='anulado');
+    box.innerHTML = `
+      ${aprobados.length ? `<p class="hint" style="color:var(--lime);">✅ Tienes ${aprobados.length} ticket(s) aprobado(s) y disponible(s).</p>` : `<p class="hint">⏳ Tus tickets aún están pendientes de aprobación del administrador.</p>`}
+      <div class="table-wrap"><table><thead><tr><th>Categoría</th><th>Ubicación</th><th>Estado</th></tr></thead>
+      <tbody>${data.map(t=>`<tr><td>${escapeHtml(t.categoria||'')}</td><td>${escapeHtml(t.ubicacion_detalle||t.ubicacion_tipo||'')}</td><td>${t.estado==='vendido'?'Aprobado':t.estado==='anulado'?'Anulado':'Pendiente'}</td></tr>`).join('')}</tbody></table></div>
+      ${aprobados.length ? `<p class="hint" style="margin-top:8px;">Ingresa con tu correo o cédula en "Mis tickets" desde la página principal para ver el código QR de cada entrada.</p>` : ''}`;
+  }
+};
+
+/* =========================================================
    INIT
 ========================================================= */
 document.addEventListener('DOMContentLoaded', ()=>{
   Router.go('landing');
   IconSettings.apply();
   checkBoldReturn();
+  const params = new URLSearchParams(location.search);
+  if(params.get('validar')==='1'){
+    ValidarPopup.abrir(params.get('evento'));
+  }
 });
 
 /* =========================================================
