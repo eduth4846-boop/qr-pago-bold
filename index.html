@@ -1177,13 +1177,31 @@ async function getQrDataUrl(text, size){
   // PDF como en pantalla, evitando QR borrosos al escanear.
   const px = Math.max(size||0, 380);
   new QRCode(box, {text: text, width:px, height:px, colorDark:'#111014', colorLight:'#ffffff'});
-  await new Promise(res=>setTimeout(res,60));
-  const el = box.querySelector('img') || box.querySelector('canvas');
+  // El QR se pinta de forma SÍNCRONA sobre un <canvas> interno de la
+  // librería en cuanto se instancia QRCode; leerlo directamente evita el
+  // bug de antes: se esperaba un tiempo fijo (60ms) y a veces, en equipos
+  // lentos o con la pestaña en segundo plano, el QR aún no estaba listo.
+  // El resultado era un QR "vacío" que, al dibujarse encima del ticket
+  // (fondo oscuro), se veía como un cuadro negro y no era legible al
+  // escanear. Como respaldo, si el navegador solo generó un <img> (algún
+  // modo de compatibilidad), se espera a que termine de cargar antes de
+  // leer su imagen, en vez de asumir un tiempo arbitrario.
   let dataUrl = null;
+  const canvas = box.querySelector('canvas');
   try{
-    if(el && el.tagName==='CANVAS') dataUrl = el.toDataURL('image/png');
-    else if(el && el.tagName==='IMG') dataUrl = el.src;
+    if(canvas) dataUrl = canvas.toDataURL('image/png');
   }catch(e){}
+  if(!dataUrl){
+    const img = box.querySelector('img');
+    if(img){
+      await new Promise(res=>{
+        if(img.complete && img.naturalWidth>0) return res();
+        img.onload = res; img.onerror = res;
+        setTimeout(res, 500); // límite de seguridad, no bloquear indefinidamente
+      });
+      try{ dataUrl = img.src; }catch(e){}
+    }
+  }
   box.remove();
   return dataUrl;
 }
@@ -1270,10 +1288,29 @@ async function _generarImagenEntradas(evento, tickets){
     // para que al reescalarlo dentro del canvas quede nítido incluso después de
     // la compresión que aplica WhatsApp al enviar la imagen.
     new QRCode(qrBox, {text: JSON.stringify({codigo:t.codigo, evento:t.evento_id}), width:QR_DRAW*2, height:QR_DRAW*2, colorDark:'#111014', colorLight:'#ffffff'});
-    await new Promise(res=>setTimeout(res,60));
-    const qrImgEl = qrBox.querySelector('img') || qrBox.querySelector('canvas');
-    if(qrImgEl){
-      try{ ctx.drawImage(qrImgEl, PAD+16, y+16, QR_DRAW, QR_DRAW); }catch(e){}
+    // Fondo blanco de respaldo debajo del QR: la tarjeta del ticket es
+    // oscura, así que si por algún motivo el QR no llegara a pintarse a
+    // tiempo, antes quedaba un hueco negro en vez de blanco (QR ilegible
+    // al escanear). Ahora se pinta primero un cuadro blanco y encima el QR.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(PAD+16, y+16, QR_DRAW, QR_DRAW);
+    // El QR se dibuja de forma SÍNCRONA en un <canvas> interno de la
+    // librería al instanciar QRCode, así que se lee directamente de ahí en
+    // vez de esperar un tiempo fijo (60ms), que en equipos lentos no
+    // siempre alcanzaba y dejaba el QR a medio generar.
+    const qrCanvas = qrBox.querySelector('canvas');
+    if(qrCanvas){
+      try{ ctx.drawImage(qrCanvas, PAD+16, y+16, QR_DRAW, QR_DRAW); }catch(e){}
+    } else {
+      const qrImgEl = qrBox.querySelector('img');
+      if(qrImgEl){
+        await new Promise(res=>{
+          if(qrImgEl.complete && qrImgEl.naturalWidth>0) return res();
+          qrImgEl.onload = res; qrImgEl.onerror = res;
+          setTimeout(res, 500);
+        });
+        try{ ctx.drawImage(qrImgEl, PAD+16, y+16, QR_DRAW, QR_DRAW); }catch(e){}
+      }
     }
     qrBox.remove();
     const tx = PAD+16+QR_DRAW+20;
@@ -4050,11 +4087,23 @@ const AdminApp = {
         qrBox.style.position = 'absolute'; qrBox.style.left = '-9999px';
         document.body.appendChild(qrBox);
         new QRCode(qrBox, {text: qrTexto, width:130, height:130, colorDark:'#111014', colorLight:'#ffffff'});
-        await new Promise(res=>setTimeout(res, 40));
-        const qrEl = qrBox.querySelector('img') || qrBox.querySelector('canvas');
+        // Se lee directo del <canvas> (se pinta de forma síncrona al crear el
+        // QRCode) en vez de esperar un tiempo fijo, que en equipos lentos
+        // podía dejar el QR incrustado en el Excel a medio generar/ilegible.
         let dataUrl = null;
-        if(qrEl){
-          try{ dataUrl = qrEl.tagName==='CANVAS' ? qrEl.toDataURL('image/png') : qrEl.src; }catch(e){}
+        const qrCanvas = qrBox.querySelector('canvas');
+        if(qrCanvas){
+          try{ dataUrl = qrCanvas.toDataURL('image/png'); }catch(e){}
+        } else {
+          const qrImgEl = qrBox.querySelector('img');
+          if(qrImgEl){
+            await new Promise(res=>{
+              if(qrImgEl.complete && qrImgEl.naturalWidth>0) return res();
+              qrImgEl.onload = res; qrImgEl.onerror = res;
+              setTimeout(res, 500);
+            });
+            try{ dataUrl = qrImgEl.src; }catch(e){}
+          }
         }
         qrBox.remove();
         if(dataUrl && dataUrl.indexOf('data:')===0){
