@@ -3518,7 +3518,13 @@ const AdminApp = {
     this.catSync(key);
     this.catRender(key);
   },
-  catAddCategoria(key){
+  // Nota: para un evento YA CREADO (key !== 'nuevo'), agregar una categoría
+  // aquí también la guarda de inmediato (llama a guardarCategorias), en vez
+  // de dejarla solo en memoria a la espera de que el admin pulse por
+  // separado "Guardar categorías y servicio". Antes era fácil que esa
+  // categoría se quedara solo en el formulario y nunca se creara en el mapa
+  // del evento (ni sus sillas) si no se pulsaba ese segundo botón.
+  async catAddCategoria(key){
     this.catSync(key);
     const st = this._catState[key];
     const d = st.draft;
@@ -3532,7 +3538,11 @@ const AdminApp = {
     });
     st.draft = {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0};
     this.catRender(key);
-    toast('Categoría agregada: '+d.nombre.trim());
+    if(key!=='nuevo'){
+      await this.guardarCategorias(key);
+    } else {
+      toast('Categoría agregada: '+d.nombre.trim());
+    }
   },
   catRemoveCategoria(key, idx){
     this.catSync(key);
