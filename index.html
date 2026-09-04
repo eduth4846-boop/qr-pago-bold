@@ -1334,6 +1334,9 @@ const IconSettings = {
 const Router = {
   current: 'landing',
   go(view){
+    // Al cambiar de interfaz, detiene los refrescos automáticos de la
+    // vista anterior para no acumular peticiones innecesarias.
+    if(typeof AutoRefresh !== 'undefined') AutoRefresh.stopAll();
     document.querySelectorAll('main > section').forEach(s=>s.classList.add('hide'));
     const target = document.getElementById('view-'+view);
     if(target) target.classList.remove('hide');
@@ -1346,13 +1349,42 @@ const Router = {
 };
 
 /* =========================================================
-   AUTH (estado global simple)
+   AUTO-REFRESH (mantiene cada interfaz actualizada en tiempo real
+   sin que el usuario tenga que recargar la página manualmente)
 ========================================================= */
+const AutoRefresh = {
+  timers: {},
+  start(key, fn, intervalMs=20000){
+    this.stop(key);
+    // Evita solapar peticiones: solo refresca si la pestaña sigue visible
+    // y no hay otra petición del mismo refresco en curso.
+    let running = false;
+    this.timers[key] = setInterval(async ()=>{
+      if(running || document.hidden) return;
+      running = true;
+      try{ await fn(); }catch(e){ /* refresco silencioso: no interrumpe al usuario */ }
+      running = false;
+    }, intervalMs);
+  },
+  stop(key){
+    if(this.timers[key]){ clearInterval(this.timers[key]); delete this.timers[key]; }
+  },
+  stopAll(){
+    Object.keys(this.timers).forEach(k=>this.stop(k));
+  }
+};
+
+/* =========================================================
+   AUTH (estado global simple, con sesión persistente)
+========================================================= */
+const AUTH_STORAGE_KEY = 'glm_auth_session_v1';
 const Auth = {
   role: null, // usuario | admin | qr | vt
   identity: null, // datos del usuario logueado
   logout(){
     this.role = null; this.identity = null;
+    try{ localStorage.removeItem(AUTH_STORAGE_KEY); }catch(e){}
+    AutoRefresh.stopAll();
     document.getElementById('btnLogout').classList.add('hide');
     document.getElementById('roleBadgeWrap').innerHTML='';
     document.getElementById('evtPillWrap').innerHTML='';
@@ -1362,6 +1394,52 @@ const Auth = {
     this.role = role; this.identity = identity;
     document.getElementById('btnLogout').classList.remove('hide');
     document.getElementById('roleBadgeWrap').innerHTML = `<span class="role-badge">${label}</span>`;
+    // Guarda la sesión en este navegador para que la persona siga
+    // ingresada aunque cierre o refresque el explorador.
+    try{ localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({role, identity, label, ts:Date.now()})); }catch(e){}
+  },
+  // Intenta restaurar una sesión guardada anteriormente en este navegador.
+  // Devuelve true si logró reingresar a alguna interfaz.
+  async restore(){
+    let saved = null;
+    try{ saved = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || 'null'); }catch(e){ saved = null; }
+    if(!saved || !saved.role) return false;
+    try{
+      if(saved.role === 'admin'){
+        this.setRole('admin', {}, 'Admin');
+        Router.go('admin');
+        await AdminApp.loadEventos();
+        AdminApp.tab('a-eventos');
+        AdminApp.iniciarMonitorCompras();
+        return true;
+      }
+      if(saved.role === 'qr' && saved.identity && saved.identity.usuario){
+        QRApp.identity = saved.identity;
+        this.setRole('qr', saved.identity, 'QR · '+saved.identity.usuario);
+        renderEventPill(null);
+        Router.go('qr');
+        QRApp.tab('q-scan');
+        return true;
+      }
+      if(saved.role === 'vt' && saved.identity && saved.identity.usuario){
+        VTApp.identity = saved.identity;
+        this.setRole('vt', saved.identity, 'VT · '+saved.identity.usuario);
+        renderEventPill(null);
+        Router.go('vt');
+        VTApp.tab('v-vender');
+        return true;
+      }
+      if(saved.role === 'usuario' && saved.identity && saved.identity.value){
+        const inp = document.getElementById('userLookup');
+        if(inp) inp.value = saved.identity.value;
+        await UsuarioApp.login();
+        return true;
+      }
+    }catch(e){
+      console.warn('No se pudo restaurar la sesión guardada', e);
+      try{ localStorage.removeItem(AUTH_STORAGE_KEY); }catch(_){}
+    }
+    return false;
   }
 };
 
@@ -2056,6 +2134,20 @@ const UsuarioApp = {
     }
     if(name==='u-comprar') this.renderComprar();
     if(name==='u-transferir') this.renderTransferir();
+    // Mantiene "Mis tickets" actualizado en tiempo real (por ejemplo si el
+    // administrador aprueba una compra pendiente mientras la persona espera).
+    if(name==='u-tickets') AutoRefresh.start('usuario-tickets', ()=>this.refreshTickets(), 15000);
+    else AutoRefresh.stop('usuario-tickets');
+  },
+  // Vuelve a consultar los tickets del usuario sin interrumpir lo que esté
+  // haciendo (no muestra errores ni cambia de pestaña).
+  async refreshTickets(){
+    const val = document.getElementById('userLookup') ? document.getElementById('userLookup').value.trim() : '';
+    if(!val) return;
+    const {data, error} = await sb.from('tickets').select('*').or(`correo.eq.${val},cedula.eq.${val}`).order('created_at',{ascending:true});
+    if(error || !data || !data.length) return;
+    this.tickets = data;
+    if(Router.current==='usuario') this.renderTickets();
   },
   /* ---------- Transferencia P2P de tickets (código de 4 dígitos) ---------- */
   renderTransferir(){
@@ -2595,6 +2687,12 @@ const AdminApp = {
       this.actualizarBadgeCompras();
     }
     if(name==='a-chat') this.renderChat();
+    // Refresco en tiempo real de las pestañas con datos que cambian seguido.
+    AutoRefresh.stop('admin-tab');
+    if(name==='a-tickets') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-tickets') this.renderTickets(); }, 20000);
+    if(name==='a-compras') AutoRefresh.start('admin-tab', ()=>this.renderCompras(), 15000);
+    if(name==='a-stats') AutoRefresh.start('admin-tab', ()=>this.renderStats(), 30000);
+    this.current = name;
   },
   renderMapa(){
     const box = document.getElementById('a-mapa');
@@ -3693,6 +3791,13 @@ const QRApp = {
     document.getElementById(name).classList.remove('hide');
     if(name==='q-scan') this.renderScan();
     if(name==='q-hist') this.renderHist();
+    // Revisa periódicamente si el admin pausó/reactivó el evento mientras
+    // se está escaneando, para reflejarlo sin recargar la página.
+    AutoRefresh.stop('qr-evento');
+    if(name==='q-scan' && this.evento) AutoRefresh.start('qr-evento', async ()=>{
+      const {data} = await sb.from('eventos').select('*').eq('id', this.evento.id).limit(1);
+      if(data && data[0]){ this.evento = data[0]; renderEventPill(this.evento); }
+    }, 30000);
   },
   // Deja que el usuario de control de acceso escoja en qué evento va a
   // escanear entradas, antes de mostrar la cámara/escáner.
@@ -3861,6 +3966,9 @@ const VTApp = {
     if(name==='v-vender') this.renderVender();
     if(name==='v-mis') this.renderMis();
     if(name==='v-chat') this.renderChat();
+    // Mantiene "Mis tickets vendidos" al día en tiempo real.
+    AutoRefresh.stop('vt-mis');
+    if(name==='v-mis') AutoRefresh.start('vt-mis', ()=>this.renderMis(), 20000);
   },
   // Deja que el vendedor escoja de qué evento quiere vender tickets antes
   // de mostrar el formulario de venta.
@@ -4317,9 +4425,12 @@ const ValidarPopup = {
 /* =========================================================
    INIT
 ========================================================= */
-document.addEventListener('DOMContentLoaded', ()=>{
-  Router.go('landing');
+document.addEventListener('DOMContentLoaded', async ()=>{
   IconSettings.apply();
+  // Intenta reingresar automáticamente si había una sesión guardada en este
+  // navegador (para no pedir login otra vez tras cerrar/reabrir el explorador).
+  const restored = await Auth.restore().catch(()=>false);
+  if(!restored) Router.go('landing');
   checkBoldReturn();
   const params = new URLSearchParams(location.search);
   if(params.get('validar')==='1'){
