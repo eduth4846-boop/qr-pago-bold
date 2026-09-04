@@ -3800,6 +3800,7 @@ const AdminApp = {
             <div class="hint" style="margin-top:6px;">${items}</div>
             <div><b>Total: ${money(s.total)}</b></div>
             <div class="hint">Método: ${escapeHtml(s.metodo_pago||'transferencia')}${s.bold_status ? ' · Bold: '+escapeHtml(s.bold_status) : ''}</div>
+            ${s.recibo_url ? `<div style="margin-top:6px;"><a href="${s.recibo_url}" target="_blank" class="btn btn-sm">🧾 Ver recibo de efectivo</a></div>` : ''}
           </div>
           ${s.comprobante_url ? `<img src="${s.comprobante_url}" class="comprobante-thumb" onclick="AdminApp.zoomImg('${s.comprobante_url}')">` : ''}
         </div>
@@ -4731,19 +4732,20 @@ const VTApp = {
       // Se ocupan las sillas de inmediato para que no se puedan vender dos veces
       // mientras la solicitud está pendiente de aprobación.
       await Promise.all(items.map(x=> sb.from('asientos').update({ocupado:true}).eq('id', x.asiento.id)));
-      const {error} = await sb.from('solicitudes_compra').insert({
+      const {data: solData, error} = await sb.from('solicitudes_compra').insert({
         evento_id: evento.id,
         sala: 'admin_vt_'+this.identity.usuario,
         nombre: cliente.nombre, correo: cliente.correo, cedula: cliente.cedula, telefono: cliente.telefono,
         items: solItems, total, comprobante_url, estado:'pendiente', metodo_pago: tipo_pago,
         vt_usuario: this.identity.usuario
-      });
+      }).select();
       if(error){ toast('Error enviando la venta: '+error.message, true); console.error(error); btn.disabled=false; btn.textContent='🎟️ Enviar venta para aprobación'; return; }
+      const solicitudId = solData && solData[0] ? solData[0].id : null;
       await sb.from('vendedores').update({asignados:(this.identity.asignados||0)+cantidad}).eq('id', this.identity.id);
       this.identity.asignados = (this.identity.asignados||0)+cantidad;
       toast(cantidad+' ticket(s) enviado(s) para aprobación del admin · Total '+money(total));
       if(tipo_pago==='efectivo'){
-        try{ await this.generarReciboEfectivo(evento, cliente, items, total); }
+        try{ await this.generarReciboEfectivo(evento, cliente, items, total, solicitudId); }
         catch(e){ console.error(e); toast('La venta quedó registrada, pero no se pudo generar el recibo PDF: '+(e.message||e), true); }
       }
       // Queda listo para registrar la venta del siguiente cliente en el mismo evento.
@@ -4757,9 +4759,13 @@ const VTApp = {
   },
   // Genera el recibo de caja en PDF (formato boleta/ticket, 80mm de ancho) cuando
   // el pago fue en efectivo: consecutivo, datos del evento y del cliente, detalle
-  // de la compra, total, y un código de barras con la URL de validación de tickets
+  // de la compra, total, y un QR con la URL de validación de tickets
   // (pide cédula o correo para ver si el admin ya aprobó la venta).
-  async generarReciboEfectivo(evento, cliente, items, total){
+  // Además: sube el PDF a Storage, lo adjunta a la solicitud enviada al admin
+  // (columna recibo_url) y lo envía automáticamente por WhatsApp (API oficial
+  // de Meta/WhatsApp Cloud API) al número de teléfono con el que se registró
+  // el cliente, vía la Edge Function "enviar-recibo-whatsapp".
+  async generarReciboEfectivo(evento, cliente, items, total, solicitudId){
     NetworkActivity.begin();
     try{
       const itemsJson = items.map(x=>({
@@ -4848,6 +4854,44 @@ const VTApp = {
       doc.text('Conserve este recibo', cx, y, {align:'center'});
 
       const filename = 'recibo_'+consecutivo+'.pdf';
+
+      // ---- Adjuntar el recibo a la solicitud del admin + enviarlo por WhatsApp ----
+      // Esto es "best effort": si falla (sin bucket configurado, sin credenciales
+      // de WhatsApp, etc.) el recibo local ya generado no se ve afectado.
+      try{
+        const pdfBlob = doc.output('blob');
+        const pdfFile = new File([pdfBlob], filename, {type:'application/pdf'});
+        // Bucket público "recibos" en Supabase Storage (debe existir de antemano).
+        const recibo_url = await uploadToBucket('recibos', pdfFile, 'efectivo/'+(evento.id||'evento'));
+        await sb.from('recibos_caja').update({pdf_url: recibo_url}).eq('id', recibo[0].id);
+        if(solicitudId){
+          // El admin verá el recibo adjunto directamente en la solicitud pendiente.
+          await sb.from('solicitudes_compra').update({recibo_url}).eq('id', solicitudId);
+        }
+        if(cliente.telefono){
+          const resp = await fetch(EDGE_FUNCTIONS_URL + '/enviar-recibo-whatsapp', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json', 'Authorization':'Bearer '+SUPA_KEY},
+            body: JSON.stringify({
+              telefono: waPhone(cliente.telefono),
+              pdf_url: recibo_url,
+              nombre_cliente: cliente.nombre || '',
+              evento_nombre: evento.nombre || '',
+              consecutivo
+            })
+          });
+          if(resp.ok) toast('Recibo enviado por WhatsApp a '+cliente.telefono);
+          else{
+            const txt = await resp.text().catch(()=> '');
+            console.error('Fallo enviar-recibo-whatsapp:', resp.status, txt);
+            toast('El recibo se generó y quedó adjunto a la solicitud, pero no se pudo enviar por WhatsApp', true);
+          }
+        }
+      }catch(e){
+        console.error('No se pudo adjuntar/enviar el recibo automáticamente:', e);
+        toast('El recibo se generó, pero no se pudo adjuntar/enviar automáticamente: '+(e.message||e), true);
+      }
+
       try{ window.open(doc.output('bloburl'), '_blank'); }catch(e){}
       doc.save(filename);
       toast('Recibo de caja No. '+consecutivo+' generado para imprimir');
@@ -4876,6 +4920,7 @@ const VTApp = {
                 <b>${escapeHtml(s.nombre)}</b> ${badge}<br>
                 <span class="hint">${items}</span><br>
                 <b>Total: ${money(s.total)}</b> · <span class="hint">${escapeHtml(s.metodo_pago)}</span>
+                ${s.recibo_url ? `<div><a href="${s.recibo_url}" target="_blank" class="hint" style="color:var(--cyan);">🧾 Ver recibo</a></div>` : ''}
               </div>
               ${s.comprobante_url ? `<img src="${s.comprobante_url}" class="comprobante-thumb">` : ''}
             </div>
