@@ -302,33 +302,49 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 .role-card:hover::after{opacity:1;}
 
-/* ---------- slider de eventos (publicidad) ---------- */
-.evt-slider-wrap{position:relative; margin:30px 0 6px; overflow:hidden; border-radius:18px; border:1px solid var(--line-soft); background:var(--panel);}
-.evt-slider-track{display:flex; width:max-content; animation:evtSliderScroll linear infinite;}
-.evt-slider-track.paused{animation-play-state:paused;}
-@keyframes evtSliderScroll{from{transform:translateX(0);} to{transform:translateX(-50%);}}
+/* ---------- slider de eventos (publicidad) — carrusel "coverflow" ---------- */
+.evt-slider-wrap{position:relative; margin:34px 0 8px; padding:0 50px;}
+.evt-slider-stage{position:relative; height:260px; perspective:1300px; touch-action:pan-y; cursor:grab;}
+.evt-slider-stage:active{cursor:grabbing;}
+@media(max-width:600px){.evt-slider-stage{height:190px;} .evt-slider-wrap{padding:0 40px;}}
 .evt-slide{
-  position:relative; flex:0 0 auto; width:300px; height:170px; margin-right:14px; border-radius:14px; overflow:hidden;
-  cursor:pointer; border:1px solid var(--line-soft); background:#0e0a1e;
+  position:absolute; top:50%; left:50%; width:300px; height:200px; border-radius:20px; overflow:hidden;
+  cursor:pointer; border:1px solid var(--line-soft); background:#0e0a1e; box-shadow:var(--shadow);
+  transition:transform .55s cubic-bezier(.22,.9,.32,1), opacity .55s ease, filter .55s ease;
+  will-change:transform; user-select:none;
 }
-@media(max-width:600px){.evt-slide{width:230px; height:130px;}}
-.evt-slide img{width:100%; height:100%; object-fit:cover; display:block; transition:.35s;}
-.evt-slide:hover img{transform:scale(1.06);}
+@media(max-width:600px){.evt-slide{width:200px; height:150px;}}
+.evt-slide.is-active{border-color:var(--line-soft); box-shadow:var(--shadow), var(--glow-violet);}
+.evt-slide img{width:100%; height:100%; object-fit:cover; display:block; pointer-events:none;}
 .evt-slide .evt-slide-fallback{
   width:100%; height:100%; display:flex; align-items:center; justify-content:center; text-align:center; padding:10px;
   font-family:'Orbitron',sans-serif; font-size:15px; background:linear-gradient(160deg, rgba(255,46,224,.25), rgba(0,240,255,.18));
 }
 .evt-slide .evt-slide-info{
-  position:absolute; left:0; right:0; bottom:0; padding:10px 12px 8px;
-  background:linear-gradient(0deg, rgba(0,0,0,.82), rgba(0,0,0,0));
-  color:#fff;
+  position:absolute; left:0; right:0; bottom:0; padding:12px 14px 10px;
+  background:linear-gradient(0deg, rgba(0,0,0,.86), rgba(0,0,0,0));
+  color:#fff; opacity:0; transform:translateY(6px); transition:opacity .4s, transform .4s; pointer-events:none;
 }
-.evt-slide .evt-slide-info b{display:block; font-size:14px; font-family:'Orbitron',sans-serif;}
-.evt-slide .evt-slide-info span{font-size:11px; opacity:.85;}
+.evt-slide.is-active .evt-slide-info{opacity:1; transform:translateY(0);}
+.evt-slide .evt-slide-info b{display:block; font-size:15px; font-family:'Orbitron',sans-serif;}
+.evt-slide .evt-slide-info span{font-size:11.5px; opacity:.85;}
 .evt-slide .evt-slide-cta{
-  position:absolute; top:8px; right:8px; font-size:10px; padding:3px 8px; border-radius:20px;
-  background:rgba(0,240,255,.9); color:#0a0a0a; font-weight:700; letter-spacing:.02em;
+  position:absolute; top:10px; right:10px; font-size:10.5px; padding:4px 10px; border-radius:20px;
+  background:rgba(0,240,255,.92); color:#0a0a0a; font-weight:700; letter-spacing:.02em;
+  opacity:0; transform:translateY(-4px); transition:opacity .4s, transform .4s; pointer-events:none;
 }
+.evt-slide.is-active .evt-slide-cta{opacity:1; transform:translateY(0);}
+.evt-slider-nav{
+  position:absolute; top:50%; transform:translateY(-50%); width:38px; height:38px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; font-size:20px; cursor:pointer; z-index:30;
+  background:var(--panel); border:1px solid var(--line-soft); color:var(--text-dim); transition:.2s; user-select:none;
+}
+.evt-slider-nav:hover{color:#fff; border-color:var(--cyan); box-shadow:var(--glow-cyan);}
+.evt-slider-nav.prev{left:0;}
+.evt-slider-nav.next{right:0;}
+.evt-slider-dots{display:flex; justify-content:center; gap:7px; margin-top:14px;}
+.evt-slider-dots span{width:7px; height:7px; border-radius:50%; background:var(--line); cursor:pointer; transition:.2s; display:inline-block;}
+.evt-slider-dots span.active{background:var(--pink); box-shadow:var(--glow-pink); width:20px; border-radius:5px;}
 .evt-picker-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px; margin-top:16px;}
 .evt-picker-card{
   background:var(--panel); border:1px solid var(--line-soft); border-radius:14px; overflow:hidden; cursor:pointer;
@@ -1913,16 +1929,19 @@ const Seats = {
   async ensureSeeded(evento){
     const {count} = await sb.from('asientos').select('id',{count:'exact', head:true}).eq('evento_id', evento.id);
     if(count && count>0) return;
-    const mapa = evento.mapa || {palcos:8, vip:30, general:120};
+    const mapa = evento.mapa || {palcos:8, vipUbicaciones:0, general:120};
     const sillasPalco = Number(mapa.sillasPalco)||8;
+    const sillasVip = Number(mapa.sillasVip)||8;
     const rows = [];
     for(let p=1;p<=mapa.palcos;p++){
       for(let s=1;s<=sillasPalco;s++){
         rows.push({evento_id:evento.id, zona:'palco', numero:`P${p}-S${s}`});
       }
     }
-    for(let v=1;v<=(mapa.vip||0);v++){
-      rows.push({evento_id:evento.id, zona:'vip', numero:`V${v}`});
+    for(let v=1;v<=(mapa.vipUbicaciones||0);v++){
+      for(let s=1;s<=sillasVip;s++){
+        rows.push({evento_id:evento.id, zona:'vip', numero:`VIP${v}-S${s}`});
+      }
     }
     for(let g=1;g<=mapa.general;g++){
       rows.push({evento_id:evento.id, zona:'general', numero:`G${g}`});
@@ -1936,8 +1955,9 @@ const Seats = {
   // Agrega asientos nuevos (palcos y/o VIP) sin tocar los ya existentes,
   // usado cuando el admin aumenta las cantidades desde "Ajustar palcos/VIP".
   async growToMapa(evento){
-    const mapa = evento.mapa || {palcos:0, vip:0, general:0};
+    const mapa = evento.mapa || {palcos:0, vipUbicaciones:0, general:0};
     const sillasPalco = Number(mapa.sillasPalco)||8;
+    const sillasVip = Number(mapa.sillasVip)||8;
     const existentes = await this.all(evento.id);
     // Sillas ya existentes por cada palco (P1, P2, ...), para poder agregar solo
     // las que falten -tanto en palcos nuevos como en palcos ya creados cuando se
@@ -1948,7 +1968,14 @@ const Seats = {
       if(!sillasPorPalco[pKey]) sillasPorPalco[pKey] = new Set();
       sillasPorPalco[pKey].add(a.numero.split('-')[1]);
     });
-    const vipExistentes = existentes.filter(a=>a.zona==='vip').length;
+    // Igual que con los palcos: sillas ya existentes por cada ubicación VIP
+    // (VIP1, VIP2, ...), para agregar solo las que falten.
+    const sillasPorVip = {};
+    existentes.filter(a=>a.zona==='vip' && a.numero.includes('-')).forEach(a=>{
+      const vKey = a.numero.split('-')[0];
+      if(!sillasPorVip[vKey]) sillasPorVip[vKey] = new Set();
+      sillasPorVip[vKey].add(a.numero.split('-')[1]);
+    });
     const generalExistentes = existentes.filter(a=>a.zona==='general').length;
     const rows = [];
     for(let p=1;p<=(mapa.palcos||0);p++){
@@ -1960,8 +1987,14 @@ const Seats = {
         rows.push({evento_id:evento.id, zona:'palco', numero:`${pKey}-${sKey}`});
       }
     }
-    for(let v=vipExistentes+1; v<=(mapa.vip||0); v++){
-      rows.push({evento_id:evento.id, zona:'vip', numero:`V${v}`});
+    for(let v=1; v<=(mapa.vipUbicaciones||0); v++){
+      const vKey = `VIP${v}`;
+      const yaTiene = sillasPorVip[vKey] || new Set();
+      for(let s=1;s<=sillasVip;s++){
+        const sKey = `S${s}`;
+        if(yaTiene.has(sKey)) continue;
+        rows.push({evento_id:evento.id, zona:'vip', numero:`${vKey}-${sKey}`});
+      }
     }
     for(let g=generalExistentes+1; g<=(mapa.general||0); g++){
       rows.push({evento_id:evento.id, zona:'general', numero:`G${g}`});
@@ -2177,23 +2210,26 @@ const MapView = {
     const objetos = (mapa.objetos || []).map(o=>({...o}));
     const fondo = mapa.fondo || null; // {src, w, h, opacidad} — imagen del plano subida por el admin
 
-    const palcos = {}; let vipTaken=0, vipTotal=0, generalTaken=0, generalTotal=0;
-    const vipSeats = [];
+    const palcos = {}; const vips = {}; let generalTaken=0, generalTotal=0;
     asientos.forEach(a=>{
       if(a.zona==='palco'){
         const p = a.numero.split('-')[0];
         palcos[p] = palcos[p] || [];
         palcos[p].push(a);
       } else if(a.zona==='vip'){
-        vipTotal++; if(a.ocupado) vipTaken++;
-        vipSeats.push(a);
+        // Ubicaciones VIP numeradas (VIP1-S1, VIP2-S3...) se agrupan igual que
+        // los palcos; asientos VIP planos de eventos antiguos (V1, V2...) caen
+        // todos en una sola bolsa "VIPFLAT" para no perder compatibilidad.
+        const v = a.numero.includes('-') ? a.numero.split('-')[0] : 'VIPFLAT';
+        vips[v] = vips[v] || [];
+        vips[v].push(a);
       } else if(a.zona==='general'){
         generalTotal++; if(a.ocupado) generalTaken++;
       }
     });
-    vipSeats.sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
     const myNum = myTicket ? myTicket.ubicacion_detalle : null;
     const palcoKeys = Object.keys(palcos).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
+    const vipKeys = Object.keys(vips).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
 
     // ---- build zone definitions (key, label, cols, rows, seat list) ----
     // Cada zona guarda además "baseLabel" (el nombre editable, sin el conteo de
@@ -2205,19 +2241,27 @@ const MapView = {
     // ya creado (total>0): así no aparecen ubicaciones "fantasma" que nunca
     // fueron creadas explícitamente por el admin.
     let zones = [];
+    const palcoPiso = Number(mapa.palcoPiso)||1;
+    const vipPiso = Number(mapa.vipPiso)||1;
     palcoKeys.forEach(p=>{
       const seats = palcos[p].sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
       const zkey = 'P_'+p;
       const base = nombresMap[zkey] || p;
-      zones.push({key:zkey, label:base, baseLabel:base, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'palco', piso:1});
+      zones.push({key:zkey, label:base, baseLabel:base, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'palco', piso:palcoPiso});
     });
-    if(vipTotal>0){
-      const base = nombresMap['VIP'] || 'Zona VIP';
-      zones.push({
-        key:'VIP', label:`${base.toUpperCase()} (${vipTaken}/${vipTotal})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(vipTotal/10)),
-        seats:vipSeats, kind:'vip', piso:1
-      });
-    }
+    vipKeys.forEach(v=>{
+      const seats = vips[v].sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
+      const taken = seats.filter(a=>a.ocupado).length;
+      const zkey = 'VIPU_'+v;
+      if(v==='VIPFLAT'){
+        // Zona VIP plana (formato antiguo): se muestra igual que antes, con conteo de ocupación.
+        const base = nombresMap[zkey] || 'Zona VIP';
+        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${seats.length})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(seats.length/10)), seats, kind:'vip', piso:vipPiso});
+      } else {
+        const base = nombresMap[zkey] || `VIP ${v.replace('VIP','')}`;
+        zones.push({key:zkey, label:base, baseLabel:base, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'vip', piso:vipPiso});
+      }
+    });
     const generalSeats = Array.from({length:Math.min(generalTotal,120)}).map((_,i)=> asientos.find(a=>a.zona==='general' && a.numero===`G${i+1}`)).filter(Boolean);
     if(generalTotal>0){
       const base = nombresMap['GENERAL'] || 'General';
@@ -2266,11 +2310,11 @@ const MapView = {
     const canvasW = this.BASE_W;
     const stagePos = (layout.STAGE) || {x: Math.round((canvasW-stageW)/2), y: 6};
 
-    const palcoBoxes = zones.filter(z=>z.kind==='palco').map(z=>({key:z.key, w:z.w, h:z.h}));
+    const palcoBoxes = zones.filter(z=>z.kind==='palco'||z.kind==='vip').map(z=>({key:z.key, w:z.w, h:z.h}));
     const packed = this.packDefault(palcoBoxes, stagePos.y + stageH + 10, canvasW);
     let cursorY = packed.bottom;
     const defaultPos = {...packed.pos};
-    ['VIP','GENERAL', ...customZoneKeys].forEach(k=>{
+    ['GENERAL', ...customZoneKeys].forEach(k=>{
       const z = zones.find(zz=>zz.key===k);
       if(!z) return;
       defaultPos[k] = {x:6, y:cursorY};
@@ -2315,7 +2359,7 @@ const MapView = {
       } else {
         inner = z.seats.map(s=>{
           const zoneName = z.kind==='vip'?z.baseLabel:(z.kind==='general'?z.baseLabel:(z.kind==='custom'?z.customLabel:z.label));
-          const info = z.kind==='palco' ? `${z.label} · Silla ${s.numero.split('-')[1]||s.numero}` : `${zoneName} · ${s.numero}`;
+          const info = (z.kind==='palco' || (z.kind==='vip' && s.numero.includes('-'))) ? `${z.label} · Silla ${s.numero.split('-')[1]||s.numero}` : `${zoneName} · ${s.numero}`;
           return seatEl(s, info);
         }).join('');
       }
@@ -2817,40 +2861,117 @@ const ChatKit = {
 ========================================================= */
 const EventSlider = {
   eventos: [],
+  active: 0,
+  _timer: null,
   async load(){
     const {data, error} = await sb.from('eventos').select('*').eq('estado','activo').order('created_at',{ascending:false});
     this.eventos = (!error && data) ? data : [];
+    this.active = 0;
     this.render();
   },
   render(){
     const wrap = document.getElementById('evtSliderWrap');
     if(!wrap) return;
+    this.stopAutoplay();
     if(!this.eventos.length){ wrap.classList.add('hide'); wrap.innerHTML=''; return; }
     wrap.classList.remove('hide');
-    // Se duplica la lista para lograr un loop infinito sin cortes, sin importar
-    // cuántos eventos haya creado el admin ("sin límite").
-    const items = this.eventos.concat(this.eventos).map(e=>this.slideHtml(e)).join('');
-    const speed = Math.max(18, this.eventos.length * 6);
+    const n = this.eventos.length;
+    const slides = this.eventos.map((e,i)=>this.slideHtml(e,i)).join('');
     wrap.innerHTML = `
-      <div class="evt-slider-track" id="evtSliderTrack" style="animation-duration:${speed}s;">${items}</div>`;
-    const track = document.getElementById('evtSliderTrack');
-    if(track){
-      track.addEventListener('mouseenter', ()=>track.classList.add('paused'));
-      track.addEventListener('mouseleave', ()=>track.classList.remove('paused'));
+      <div class="evt-slider-stage" id="evtSliderStage">${slides}</div>
+      ${n>1 ? `
+        <div class="evt-slider-nav prev" onclick="EventSlider.prev()">‹</div>
+        <div class="evt-slider-nav next" onclick="EventSlider.next()">›</div>
+        <div class="evt-slider-dots">${this.eventos.map((_,i)=>`<span data-i="${i}"></span>`).join('')}</div>` : ''}`;
+    wrap.querySelectorAll('.evt-slider-dots span').forEach(dot=>dot.addEventListener('click', ()=>this.goTo(Number(dot.dataset.i))));
+    const stage = document.getElementById('evtSliderStage');
+    this.attachDrag(stage);
+    this.update();
+    if(n>1){
+      stage.addEventListener('mouseenter', ()=>this.stopAutoplay());
+      stage.addEventListener('mouseleave', ()=>this.startAutoplay());
+      this.startAutoplay();
     }
   },
-  slideHtml(e){
+  slideHtml(e,i){
     const fecha = e.fecha ? `${e.fecha}${e.hora?' · '+e.hora:''}` : 'Fecha por confirmar';
     const img = e.imagen_url
       ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
          <div class="evt-slide-fallback" style="display:none;">${escapeHtml(e.nombre)}</div>`
       : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`;
     return `
-      <div class="evt-slide" onclick="EventSlider.selectEvento('${e.id}')">
+      <div class="evt-slide" data-i="${i}" data-id="${e.id}">
         ${img}
-        <span class="evt-slide-cta">Comprar</span>
-        <div class="evt-slide-info"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(fecha)}</span></div>
+        <span class="evt-slide-cta">🎟️ Comprar</span>
+        <div class="evt-slide-info"><b>${escapeHtml(e.nombre)}</b><span>📅 ${escapeHtml(fecha)}</span></div>
       </div>`;
+  },
+  // Recalcula la posición/escala/rotación 3D de cada tarjeta según su distancia
+  // a la tarjeta activa (igual idea que un carrusel "coverflow"): la activa
+  // queda grande y de frente, y las demás se achican, giran y se oscurecen
+  // hacia los lados, formando una fila que se desliza.
+  update(){
+    const n = this.eventos.length;
+    const stage = document.getElementById('evtSliderStage');
+    if(!stage) return;
+    const wide = window.innerWidth > 600;
+    const gapX = wide ? 200 : 118;
+    stage.querySelectorAll('.evt-slide').forEach(el=>{
+      const i = Number(el.dataset.i);
+      let d = i - this.active;
+      if(n>2){ if(d > n/2) d -= n; if(d < -n/2) d += n; }
+      const absD = Math.abs(d);
+      const tx = d*gapX;
+      const scale = Math.max(0.6, 1 - absD*0.16);
+      const rotY = Math.max(-30, Math.min(30, -d*20));
+      const tz = -absD*70;
+      const opacity = absD>3 ? 0 : (1 - absD*0.22);
+      el.style.transform = `translate(-50%,-50%) translateX(${tx}px) translateZ(${tz}px) rotateY(${rotY}deg) scale(${scale})`;
+      el.style.zIndex = 100 - absD;
+      el.style.opacity = opacity;
+      el.style.filter = absD===0 ? 'none' : `brightness(${Math.max(.45, 1-absD*0.22)})`;
+      el.style.pointerEvents = absD>3 ? 'none' : 'auto';
+      el.classList.toggle('is-active', d===0);
+    });
+    stage.parentElement.querySelectorAll('.evt-slider-dots span').forEach((dot,i)=>dot.classList.toggle('active', i===this.active));
+  },
+  next(){ if(!this.eventos.length) return; this.active = (this.active+1) % this.eventos.length; this.update(); this.restartAutoplay(); },
+  prev(){ if(!this.eventos.length) return; this.active = (this.active-1+this.eventos.length) % this.eventos.length; this.update(); this.restartAutoplay(); },
+  goTo(i){ this.active = i; this.update(); this.restartAutoplay(); },
+  startAutoplay(){
+    this.stopAutoplay();
+    if(this.eventos.length<2) return;
+    if(document.hidden) return;
+    this._timer = setInterval(()=>this.next(), 4200);
+  },
+  stopAutoplay(){ if(this._timer){ clearInterval(this._timer); this._timer=null; } },
+  restartAutoplay(){ this.startAutoplay(); },
+  // Arrastre con mouse/touch para deslizar manualmente entre eventos, igual
+  // que el gesto de "swipe" de un carrusel. Un arrastre corto sin desplazarse
+  // se interpreta como clic normal (para abrir la compra del evento activo).
+  attachDrag(stage){
+    if(!stage) return;
+    let startX=0, dragging=false, moved=false;
+    const onDown = (x)=>{ startX=x; dragging=true; moved=false; this.stopAutoplay(); };
+    const onMove = (x)=>{ if(!dragging) return; if(Math.abs(x-startX)>6) moved=true; };
+    const onUp = (x)=>{
+      if(!dragging) return; dragging=false;
+      const dx = x-startX;
+      if(moved){ if(dx<-40) this.next(); else if(dx>40) this.prev(); }
+      this.startAutoplay();
+    };
+    stage.addEventListener('pointerdown', e=>onDown(e.clientX));
+    stage.addEventListener('pointermove', e=>onMove(e.clientX));
+    window.addEventListener('pointerup', e=>onUp(e.clientX));
+    stage.addEventListener('click', e=>{
+      if(moved) return;
+      const card = e.target.closest('.evt-slide');
+      if(!card) return;
+      const i = Number(card.dataset.i);
+      if(i===this.active) this.selectEvento(card.dataset.id);
+      else this.goTo(i);
+    });
+    window.addEventListener('resize', ()=>this.update());
   },
   selectEvento(id){
     const evento = this.eventos.find(e=>e.id===id);
@@ -3191,7 +3312,7 @@ const UsuarioApp = {
   },
   seatLabel(a){
     if(a.zona==='palco') return `Palco ${a.numero.split('-')[0].replace('P','')} · Silla ${a.numero.split('-')[1]||''}`;
-    if(a.zona==='vip') return `VIP · ${a.numero}`;
+    if(a.zona==='vip') return a.numero.includes('-') ? `VIP ${a.numero.split('-')[0].replace('VIP','')} · Silla ${a.numero.split('-')[1]||''}` : `VIP · ${a.numero}`;
     if(a.zona==='general') return `General · ${a.numero}`;
     const evento = this.compra.evento;
     const cat = evento && evento.mapa && (evento.mapa.categorias||[]).find(c=>c.id===a.zona);
@@ -3578,7 +3699,10 @@ const AdminApp = {
   abrirInterfaz(cual){
     if(cual==='qr') Router.go('login-qr');
     else if(cual==='vt') Router.go('login-vt');
-    else if(cual==='comprar') UsuarioApp.goComprar();
+    else if(cual==='comprar'){
+      if(this.evento) UsuarioApp.comprarEvento(this.evento);
+      else UsuarioApp.goComprar();
+    }
   },
   /* ---------- Alerta de solicitudes de compra pendientes ---------- */
   iniciarMonitorCompras(){
@@ -3897,6 +4021,18 @@ const AdminApp = {
     this.tickets = await DB.ticketsByEvento(evento.id);
     await Seats.ensureSeeded(evento);
   },
+  // Muestra u oculta los selectores de "piso" de palcos/VIP según la cantidad
+  // de pisos elegida. key==='' es el formulario de "Crear evento"; para un
+  // evento ya creado, key es su id (usa los ids con sufijo "-{id}").
+  togglePisoWraps(key){
+    const sufijo = key ? '-'+key : '';
+    const pisosEl = document.getElementById((key?'mapaEditPisos':'evPisos')+sufijo);
+    const pisos = pisosEl ? (parseInt(pisosEl.value,10)||1) : 1;
+    const palcoWrap = document.getElementById((key?'mapaEditPalcoPisoWrap':'evPalcoPisoWrap')+sufijo);
+    const vipWrap = document.getElementById((key?'mapaEditVipPisoWrap':'evVipPisoWrap')+sufijo);
+    if(palcoWrap) palcoWrap.style.display = pisos>1 ? 'block' : 'none';
+    if(vipWrap) vipWrap.style.display = pisos>1 ? 'block' : 'none';
+  },
   renderEventos(){
     const box = document.getElementById('a-eventos');
     box.innerHTML = `
@@ -3913,7 +4049,7 @@ const AdminApp = {
           </div>
           <div class="field">
             <label>¿Cuántos pisos tiene el evento?</label>
-            <select id="evPisos">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===1?'selected':''}>${n===1?'1 (un solo nivel)':n+' pisos'}</option>`).join('')}</select>
+            <select id="evPisos" onchange="AdminApp.togglePisoWraps('')">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===1?'selected':''}>${n===1?'1 (un solo nivel)':n+' pisos'}</option>`).join('')}</select>
             <p class="hint" style="margin-top:4px;">Si el evento tiene más de un piso, luego podrás crear ubicaciones en cada piso desde "Crear ubicación" y elegir en cuál va cada una. En "Mapa del evento" aparecerá una pestaña por piso.</p>
           </div>
           <div class="row">
@@ -3925,14 +4061,27 @@ const AdminApp = {
               <label>Sillas por palco</label>
               <input id="evSillasPalco" type="number" min="1" value="8" placeholder="8">
             </div>
+            <div class="field" id="evPalcoPisoWrap" style="flex:1; display:none;">
+              <label>Piso de los palcos</label>
+              <select id="evPalcoPiso">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}">Piso ${n}</option>`).join('')}</select>
+            </div>
           </div>
           <p class="hint" style="margin-top:-8px;">Escribe cuántas sillas numeradas quieres en cada palco; se enumerarán automáticamente (S1, S2, S3...). Deja "Cantidad de palcos" en 0 si el evento no tendrá palcos: así no se crea ninguna ubicación de palco por defecto.</p>
           <div class="row">
             <div class="field" style="flex:1;">
-              <label>Puestos VIP</label>
-              <select id="evVip">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===0?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
+              <label>Cantidad de ubicaciones VIP</label>
+              <select id="evVipUbicaciones">${[0,1,2,3,4,5,6,7,8,9,10,12,14,16,18,20].map(n=>`<option value="${n}" ${n===0?'selected':''}>${n===0?'0 (ninguna)':n+' ubicación'+(n>1?'es':'')}</option>`).join('')}</select>
+            </div>
+            <div class="field" style="flex:1;">
+              <label>Sillas por ubicación VIP</label>
+              <input id="evSillasVip" type="number" min="1" value="8" placeholder="8">
+            </div>
+            <div class="field" id="evVipPisoWrap" style="flex:1; display:none;">
+              <label>Piso de la zona VIP</label>
+              <select id="evVipPiso">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}">Piso ${n}</option>`).join('')}</select>
             </div>
           </div>
+          <p class="hint" style="margin-top:-8px;">Escribe cuántas sillas numeradas quieres en cada ubicación VIP; se enumerarán automáticamente (S1, S2, S3...), igual que en los palcos. Deja "Cantidad de ubicaciones VIP" en 0 si el evento no tendrá VIP.</p>
           <div class="field">
             <label>Cupos zona General</label>
             <select id="evGeneral">${[0,20,50,80,120,150,200,300,400,500].map(n=>`<option value="${n}" ${n===0?'selected':''}>${n===0?'0 (ninguna)':n+' cupos'}</option>`).join('')}</select>
@@ -3979,7 +4128,7 @@ const AdminApp = {
         <div id="mapaEdit-${e.id}" class="hide" style="margin-top:10px; border-top:1px dashed var(--line); padding-top:10px;">
           <div class="field">
             <label>¿Cuántos pisos tiene el evento?</label>
-            <select id="mapaEditPisos-${e.id}">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===((e.mapa&&Number(e.mapa.pisos))||1)?'selected':''}>${n===1?'1 (un solo nivel)':n+' pisos'}</option>`).join('')}</select>
+            <select id="mapaEditPisos-${e.id}" onchange="AdminApp.togglePisoWraps('${e.id}')">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===((e.mapa&&Number(e.mapa.pisos))||1)?'selected':''}>${n===1?'1 (un solo nivel)':n+' pisos'}</option>`).join('')}</select>
             <p class="hint" style="margin-top:4px;">Al crear una ubicación luego podrás elegir en cuál piso va. En "Mapa del evento" aparecerá una pestaña por piso.</p>
           </div>
           <div class="row">
@@ -3991,19 +4140,33 @@ const AdminApp = {
               <label>Sillas por palco</label>
               <input id="mapaEditSillasPalco-${e.id}" type="number" min="${(e.mapa&&e.mapa.sillasPalco)||8}" value="${(e.mapa&&e.mapa.sillasPalco)||8}">
             </div>
+            <div class="field" id="mapaEditPalcoPisoWrap-${e.id}" style="flex:1; display:${((e.mapa&&Number(e.mapa.pisos))||1)>1?'block':'none'};">
+              <label>Piso de los palcos</label>
+              <select id="mapaEditPalcoPiso-${e.id}">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===((e.mapa&&Number(e.mapa.palcoPiso))||1)?'selected':''}>Piso ${n}</option>`).join('')}</select>
+            </div>
           </div>
           <div class="row">
             <div class="field" style="flex:1;">
-              <label>Puestos VIP</label>
-              <select id="mapaEditVip-${e.id}">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.vip)||0)?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
+              <label>Cantidad de ubicaciones VIP</label>
+              <select id="mapaEditVipUbicaciones-${e.id}">${[0,1,2,3,4,5,6,7,8,9,10,12,14,16,18,20].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.vipUbicaciones)||0)?'selected':''}>${n===0?'0 (ninguna)':n+' ubicación'+(n>1?'es':'')}</option>`).join('')}</select>
             </div>
+            <div class="field" style="flex:1;">
+              <label>Sillas por ubicación VIP</label>
+              <input id="mapaEditSillasVip-${e.id}" type="number" min="${(e.mapa&&e.mapa.sillasVip)||8}" value="${(e.mapa&&e.mapa.sillasVip)||8}">
+            </div>
+            <div class="field" id="mapaEditVipPisoWrap-${e.id}" style="flex:1; display:${((e.mapa&&Number(e.mapa.pisos))||1)>1?'block':'none'};">
+              <label>Piso de la zona VIP</label>
+              <select id="mapaEditVipPiso-${e.id}">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===((e.mapa&&Number(e.mapa.vipPiso))||1)?'selected':''}>Piso ${n}</option>`).join('')}</select>
+            </div>
+          </div>
+          <div class="row">
             <div class="field" style="flex:1;">
               <label>Cupos General</label>
               <select id="mapaEditGeneral-${e.id}">${[0,20,50,80,120,150,200,300,400,500].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.general)||0)?'selected':''}>${n===0?'0 (ninguna)':n+' cupos'}</option>`).join('')}</select>
             </div>
           </div>
           <button class="btn btn-primary btn-sm btn-block" onclick="AdminApp.guardarMapa('${e.id}')">Guardar y actualizar mapa</button>
-          <p class="hint">Solo se pueden aumentar las cantidades (palcos, sillas por palco, puestos, cupos), nunca reducirlas; los existentes y sus ocupantes no se modifican. Deja una zona en "0 / ninguno" para que no aparezca como ubicación disponible.</p>
+          <p class="hint">Solo se pueden aumentar las cantidades (palcos, sillas por palco, ubicaciones VIP, sillas por VIP, cupos), nunca reducirlas; los existentes y sus ocupantes no se modifican. Deja una zona en "0 / ninguno" para que no aparezca como ubicación disponible.</p>
           <div style="margin-top:14px; border-top:1px dashed var(--line); padding-top:10px;">
             <button class="btn btn-sm" type="button" onclick="AdminApp.toggleCategoriasPanel('${e.id}')">🏷️ Categorías y servicio por silla</button>
             <div id="catPanel-${e.id}" class="hide" style="margin-top:10px; border:1px solid var(--line); border-radius:12px; padding:12px;">
@@ -4306,13 +4469,20 @@ const AdminApp = {
     const pisosEl = document.getElementById('mapaEditPisos-'+id);
     const pisos = pisosEl ? (parseInt(pisosEl.value, 10) || 1) : ((evento.mapa && Number(evento.mapa.pisos)) || 1);
     const palcos = parseInt(document.getElementById('mapaEditPalcos-'+id).value, 10);
-    const vip = parseInt(document.getElementById('mapaEditVip-'+id).value, 10);
+    const vipUbicaciones = parseInt(document.getElementById('mapaEditVipUbicaciones-'+id).value, 10);
     const general = parseInt(document.getElementById('mapaEditGeneral-'+id).value, 10);
-    const mapaActual = evento.mapa || {palcos:0, vip:0, general:0};
+    const mapaActual = evento.mapa || {palcos:0, vipUbicaciones:0, general:0};
     const sillasPalcoActual = Number(mapaActual.sillasPalco)||8;
     const sillasPalcoEl = document.getElementById('mapaEditSillasPalco-'+id);
     const sillasPalco = sillasPalcoEl ? (parseInt(sillasPalcoEl.value, 10) || sillasPalcoActual) : sillasPalcoActual;
-    if(palcos < (mapaActual.palcos||0) || vip < (mapaActual.vip||0) || general < (mapaActual.general||0)){
+    const sillasVipActual = Number(mapaActual.sillasVip)||8;
+    const sillasVipEl = document.getElementById('mapaEditSillasVip-'+id);
+    const sillasVip = sillasVipEl ? (parseInt(sillasVipEl.value, 10) || sillasVipActual) : sillasVipActual;
+    const palcoPisoEl = document.getElementById('mapaEditPalcoPiso-'+id);
+    const vipPisoEl = document.getElementById('mapaEditVipPiso-'+id);
+    const palcoPiso = palcoPisoEl ? (parseInt(palcoPisoEl.value,10)||1) : (Number(mapaActual.palcoPiso)||1);
+    const vipPiso = vipPisoEl ? (parseInt(vipPisoEl.value,10)||1) : (Number(mapaActual.vipPiso)||1);
+    if(palcos < (mapaActual.palcos||0) || vipUbicaciones < (mapaActual.vipUbicaciones||0) || general < (mapaActual.general||0)){
       toast('No se pueden reducir las cantidades, solo aumentarlas', true);
       return;
     }
@@ -4320,7 +4490,11 @@ const AdminApp = {
       toast('No puedes reducir la cantidad de sillas por palco, solo aumentarla', true);
       return;
     }
-    let nuevoMapa = {...mapaActual, pisos, palcos, sillasPalco, vip, general};
+    if(sillasVip < sillasVipActual){
+      toast('No puedes reducir la cantidad de sillas por ubicación VIP, solo aumentarla', true);
+      return;
+    }
+    let nuevoMapa = {...mapaActual, pisos, palcos, sillasPalco, palcoPiso, vipUbicaciones, sillasVip, vipPiso, general};
 
     // Si el admin abrió el sub-panel de "Categorías y servicio por silla",
     // sincroniza y valida esos datos también, y los incluye en el mismo guardado.
@@ -4352,7 +4526,7 @@ const AdminApp = {
     if(this.evento && this.evento.id===id) this.evento.mapa = nuevoMapa;
     await Seats.growToMapa(evento);
     if(st) st.categorias.forEach(c=>{ c._persisted = true; c._cantidadOriginal = c.cantidad; });
-    toast('Mapa actualizado: '+palcos+' palcos ('+sillasPalco+' sillas c/u), '+vip+' VIP, '+general+' general');
+    toast('Mapa actualizado: '+palcos+' palcos ('+sillasPalco+' sillas c/u), '+vipUbicaciones+' ubicaciones VIP ('+sillasVip+' sillas c/u), '+general+' general');
     this.renderEventos();
   },
   async crearEvento(){
@@ -4362,10 +4536,16 @@ const AdminApp = {
     const pisos = parseInt(document.getElementById('evPisos').value, 10) || 1;
     const palcos = parseInt(document.getElementById('evPalcos').value, 10) || 0;
     const sillasPalco = parseInt(document.getElementById('evSillasPalco').value, 10) || 8;
-    const vip = parseInt(document.getElementById('evVip').value, 10) || 0;
+    const vipUbicaciones = parseInt(document.getElementById('evVipUbicaciones').value, 10) || 0;
+    const sillasVip = parseInt(document.getElementById('evSillasVip').value, 10) || 8;
     const general = parseInt(document.getElementById('evGeneral').value, 10) || 0;
+    const palcoPisoEl = document.getElementById('evPalcoPiso');
+    const vipPisoEl = document.getElementById('evVipPiso');
+    const palcoPiso = palcoPisoEl ? (parseInt(palcoPisoEl.value,10)||1) : 1;
+    const vipPiso = vipPisoEl ? (parseInt(vipPisoEl.value,10)||1) : 1;
     if(!nombre){ toast('Escribe un nombre para el evento', true); return; }
     if(palcos>0 && sillasPalco<=0){ toast('Indica cuántas sillas tendrá cada palco', true); return; }
+    if(vipUbicaciones>0 && sillasVip<=0){ toast('Indica cuántas sillas tendrá cada ubicación VIP', true); return; }
     const codigo = genCode('EVT');
     const precios = {
       palco: parseFloat(document.getElementById('evPrecioPalco').value)||0,
@@ -4392,7 +4572,7 @@ const AdminApp = {
     // Los tickets solo se crean con los datos que el admin dejó en el
     // formulario (nombre, precio, cantidad, servicio, oculto/gratis/autorización);
     // nada se agrega por fuera de lo que aquí se capturó.
-    const mapa = {pisos, palcos, sillasPalco, vip, general, precios, servicios, categorias, ocultos, gratis:gratisMapa, autorizacion:autorizacionMapa};
+    const mapa = {pisos, palcos, sillasPalco, palcoPiso, vipUbicaciones, sillasVip, vipPiso, general, precios, servicios, categorias, ocultos, gratis:gratisMapa, autorizacion:autorizacionMapa};
     let imagen_url = null;
     const imgFile = document.getElementById('evImagen').files[0];
     if(imgFile){
@@ -5293,7 +5473,7 @@ const VTApp = {
   // Etiqueta legible de una ubicación, igual que ve el comprador.
   seatLabel(a){
     if(a.zona==='palco') return `Palco ${a.numero.split('-')[0].replace('P','')} · Silla ${a.numero.split('-')[1]||''}`;
-    if(a.zona==='vip') return `VIP · ${a.numero}`;
+    if(a.zona==='vip') return a.numero.includes('-') ? `VIP ${a.numero.split('-')[0].replace('VIP','')} · Silla ${a.numero.split('-')[1]||''}` : `VIP · ${a.numero}`;
     if(a.zona==='general') return `General · ${a.numero}`;
     const evento = this.evento;
     const cat = evento && evento.mapa && (evento.mapa.categorias||[]).find(c=>c.id===a.zona);
