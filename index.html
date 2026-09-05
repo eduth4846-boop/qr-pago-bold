@@ -329,6 +329,23 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
   position:absolute; top:8px; right:8px; font-size:10px; padding:3px 8px; border-radius:20px;
   background:rgba(0,240,255,.9); color:#0a0a0a; font-weight:700; letter-spacing:.02em;
 }
+.evt-slide .evt-slide-empresa{
+  position:absolute; top:8px; left:8px; font-size:9.5px; padding:3px 8px; border-radius:20px;
+  background:rgba(255,46,224,.85); color:#fff; font-weight:700; letter-spacing:.02em; max-width:70%;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.banners-otras-empresas{margin-top:18px;}
+.banners-otras-empresas .card{padding:14px 16px;}
+.banners-otras-empresas .otras-lista{display:flex; gap:12px; overflow-x:auto; padding-top:8px;}
+.banners-otras-empresas .otra-card{
+  flex:0 0 auto; width:170px; border-radius:12px; overflow:hidden; cursor:pointer;
+  border:1px solid var(--line-soft); background:#0e0a1e; transition:.2s;
+}
+.banners-otras-empresas .otra-card:hover{border-color:var(--cyan); transform:translateY(-2px);}
+.banners-otras-empresas .otra-card img{width:100%; height:90px; object-fit:cover; display:block;}
+.banners-otras-empresas .otra-card .otra-body{padding:8px 10px;}
+.banners-otras-empresas .otra-card b{display:block; font-size:12.5px; font-family:'Orbitron',sans-serif;}
+.banners-otras-empresas .otra-card span{font-size:10.5px; color:var(--text-dim);}
 .evt-picker-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px; margin-top:16px;}
 .evt-picker-card{
   background:var(--panel); border:1px solid var(--line-soft); border-radius:14px; overflow:hidden; cursor:pointer;
@@ -868,9 +885,32 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div class="auth-shell">
         <span class="back" onclick="Router.go('landing')">‹ volver</span>
         <div class="card">
-          <div class="section-title"><h2>Panel administrador</h2></div>
-          <div class="field"><label>Clave de ingreso</label><input id="adminPass" type="password" placeholder="••••" onkeydown="if(event.key==='Enter')AdminApp.login()"></div>
+          <div class="section-title"><h2 id="adminLoginTitle">Panel administrador</h2></div>
+          <p class="hint" id="adminLoginHint" style="display:none; margin-bottom:14px;"></p>
+          <div class="field"><label>Usuario</label><input id="adminUser" placeholder="usuario" onkeydown="if(event.key==='Enter')document.getElementById('adminPass').focus()"></div>
+          <div class="field"><label>Contraseña</label><input id="adminPass" type="password" placeholder="••••" onkeydown="if(event.key==='Enter')AdminApp.login()"></div>
           <button class="btn btn-primary btn-block" onclick="AdminApp.login()">Ingresar</button>
+          <div id="registroEmpresaWrap" class="hide" style="margin-top:18px; padding-top:16px; border-top:1px solid var(--line-soft);">
+            <div class="field"><label>Nombre de la empresa</label><input id="regEmpNombre" placeholder="Ej: Mi Empresa de Eventos"></div>
+            <div class="field"><label>Correo</label><input id="regEmpCorreo" type="email" placeholder="correo@empresa.com"></div>
+            <button class="btn btn-primary btn-block" onclick="AdminApp.registrarEmpresa()">Registrar y entrar</button>
+          </div>
+          <div style="text-align:center; margin-top:14px;" id="registroEmpresaToggleWrap">
+            <span class="back" style="margin:0;" onclick="AdminApp.toggleRegistroEmpresa()" id="registroEmpresaToggle">¿Tu empresa aún no está registrada? Regístrala aquí</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CONFIRMACION: ¿ERES CLIENTE? ============ -->
+    <section id="view-confirma-cliente" class="hide">
+      <div class="auth-shell">
+        <span class="back" onclick="Router.go('landing')">‹ volver</span>
+        <div class="card" style="text-align:center;">
+          <div class="section-title"><h2 style="justify-content:center;">¿Eres cliente?</h2></div>
+          <p class="hint" style="margin-bottom:18px;">Vas a comprar entradas para <b id="confirmaEventoNombre"></b>.</p>
+          <button class="btn btn-primary btn-block" onclick="EventSlider.confirmarCliente(true)">Sí, quiero comprar</button>
+          <button class="btn btn-block" style="margin-top:10px;" onclick="EventSlider.confirmarCliente(false)">No, volver</button>
         </div>
       </div>
     </section>
@@ -946,6 +986,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="a-patro" onclick="AdminApp.tab('a-patro')">Patrocinadores</div>
         <div class="pill-tab" data-tab="a-compras" onclick="AdminApp.tab('a-compras')">Solicitudes de compra</div>
         <div class="pill-tab" data-tab="a-chat" onclick="AdminApp.tab('a-chat')">Chat</div>
+        <div class="pill-tab" data-tab="a-empresa" onclick="AdminApp.tab('a-empresa')">Mi empresa</div>
       </div>
       <div id="a-eventos" class="tab-pane"></div>
       <div id="a-tickets" class="tab-pane hide"></div>
@@ -955,6 +996,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div id="a-patro" class="tab-pane hide"></div>
       <div id="a-compras" class="tab-pane hide"></div>
       <div id="a-chat" class="tab-pane hide"></div>
+      <div id="a-empresa" class="tab-pane hide"></div>
     </section>
 
     <!-- ============ QR DASHBOARD ============ -->
@@ -1090,7 +1132,9 @@ const NetworkActivity = (() => {
 ========================================================= */
 const SUPA_URL = 'https://ukmmrbjmeumjkxdblmgc.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVrbW1yYmptZXVtamt4ZGJsbWdjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxODA4ODQsImV4cCI6MjEwMjc1Njg4NH0.mUue0VEvDTsW8dJSdumWnpzkO68vd9Fz9QMSCUJUaHQ';
-const ADMIN_PASSWORD = '1234';
+// ADMIN_PASSWORD ya no se usa: el login de admin ahora valida usuario+contraseña
+// contra la tabla `empresas` (multiempresa). Se deja comentado como referencia.
+// const ADMIN_PASSWORD = '1234';
 const WHATSAPP_NUMBER = '573192153328';
 const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
 const EDGE_FUNCTIONS_URL = SUPA_URL + '/functions/v1';
@@ -1628,6 +1672,69 @@ const AutoRefresh = {
 };
 
 /* =========================================================
+   EMPRESA (multiempresa / multiadministrador)
+   Cada admin pertenece a una fila de la tabla `empresas`. Todo evento
+   creado por un admin queda con `empresa_id` = su propia empresa, y
+   el panel de administrador solo ve sus propios eventos/vendedores.
+   Si se navega a dominio.com/<slug-de-empresa>, se detecta el slug en
+   la URL y se precarga esa empresa para ir directo a su login.
+========================================================= */
+const Empresa = {
+  current: null,     // empresa del admin autenticado (o de la ruta /slug)
+  routeSlug: null,    // slug detectado en location.pathname, si lo hay
+  detectarSlugEnURL(){
+    const path = (location.pathname || '/').replace(/\/+$/,'');
+    const seg = path.split('/').filter(Boolean)[0];
+    if(!seg) return null;
+    const reservados = ['index.html','login','admin','usuario','vt','qr'];
+    if(reservados.includes(seg.toLowerCase())) return null;
+    return decodeURIComponent(seg);
+  },
+  slugify(nombre){
+    return (nombre||'')
+      .toString().trim().toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9]+/g,'-')
+      .replace(/^-+|-+$/g,'') || ('empresa-'+Date.now());
+  },
+  async cargarPorSlug(slug){
+    const {data, error} = await sb.from('empresas').select('*').eq('slug', slug).limit(1);
+    if(error || !data || !data.length) return null;
+    return data[0];
+  },
+  async cargarPorId(id){
+    if(!id) return null;
+    const {data, error} = await sb.from('empresas').select('*').eq('id', id).limit(1);
+    if(error || !data || !data.length) return null;
+    return data[0];
+  },
+  // Se ejecuta al cargar la página: si la URL trae /nombre-empresa, se
+  // busca esa empresa y se manda directo a su pantalla de login admin,
+  // sin pasar por el landing de eventos general.
+  async initFromURL(){
+    const slug = this.detectarSlugEnURL();
+    if(!slug) return false;
+    const emp = await this.cargarPorSlug(slug);
+    if(!emp){
+      toast('No existe una empresa con ese enlace', true);
+      return false;
+    }
+    this.routeSlug = slug;
+    this.current = emp;
+    const title = document.getElementById('adminLoginTitle');
+    const hint = document.getElementById('adminLoginHint');
+    if(title) title.textContent = 'Panel administrador · ' + emp.nombre_empresa;
+    if(hint){ hint.style.display = 'block'; hint.textContent = 'Ingresa con el usuario y contraseña de "' + emp.nombre_empresa + '".'; }
+    // El registro de una empresa nueva solo aplica en el login genérico,
+    // no cuando ya se entró por el enlace directo de una empresa existente.
+    const toggleWrap = document.getElementById('registroEmpresaToggleWrap');
+    if(toggleWrap) toggleWrap.classList.add('hide');
+    Router.go('login-admin');
+    return true;
+  }
+};
+
+/* =========================================================
    AUTH (estado global simple, con sesión persistente)
 ========================================================= */
 const AUTH_STORAGE_KEY = 'glm_auth_session_v1';
@@ -1659,7 +1766,10 @@ const Auth = {
     if(!saved || !saved.role) return false;
     try{
       if(saved.role === 'admin'){
-        this.setRole('admin', {}, 'Admin');
+        const empresaId = saved.identity && saved.identity.empresa_id;
+        Empresa.current = await Empresa.cargarPorId(empresaId);
+        if(!Empresa.current){ try{ localStorage.removeItem(AUTH_STORAGE_KEY); }catch(_){ } return false; }
+        this.setRole('admin', saved.identity, 'Admin · '+Empresa.current.nombre_empresa);
         Router.go('admin');
         await AdminApp.loadEventos();
         AdminApp.tab('a-eventos');
@@ -3038,8 +3148,11 @@ const ChatKit = {
 ========================================================= */
 const EventSlider = {
   eventos: [],
+  pendingEvento: null,
   async load(){
-    const {data, error} = await sb.from('eventos').select('*').eq('estado','activo').order('created_at',{ascending:false});
+    // Trae los eventos activos de TODAS las empresas, con el nombre de
+    // la empresa dueña de cada uno (join por la relación eventos.empresa_id).
+    const {data, error} = await sb.from('eventos').select('*, empresas(nombre_empresa, slug)').eq('estado','activo').order('created_at',{ascending:false});
     this.eventos = (!error && data) ? data : [];
     this.render();
   },
@@ -3062,6 +3175,7 @@ const EventSlider = {
   },
   slideHtml(e){
     const fecha = e.fecha ? `${e.fecha}${e.hora?' · '+e.hora:''}` : 'Fecha por confirmar';
+    const empresaNombre = e.empresas && e.empresas.nombre_empresa;
     const img = e.imagen_url
       ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
          <div class="evt-slide-fallback" style="display:none;">${escapeHtml(e.nombre)}</div>`
@@ -3069,14 +3183,69 @@ const EventSlider = {
     return `
       <div class="evt-slide" onclick="EventSlider.selectEvento('${e.id}')">
         ${img}
+        ${empresaNombre ? `<span class="evt-slide-empresa">${escapeHtml(empresaNombre)}</span>` : ''}
         <span class="evt-slide-cta">Comprar</span>
         <div class="evt-slide-info"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(fecha)}</span></div>
       </div>`;
   },
+  // Antes de ir a comprar, se le pregunta al visitante si es cliente
+  // (paso de confirmación pedido explícitamente para el flujo público).
   selectEvento(id){
     const evento = this.eventos.find(e=>e.id===id);
     if(!evento){ toast('Este evento ya no está disponible', true); return; }
+    this.pendingEvento = evento;
+    document.getElementById('confirmaEventoNombre').textContent = evento.nombre;
+    Router.go('confirma-cliente');
+  },
+  confirmarCliente(esCliente){
+    const evento = this.pendingEvento;
+    this.pendingEvento = null;
+    if(!esCliente || !evento){ Router.go('landing'); return; }
     UsuarioApp.comprarEvento(evento);
+  }
+};
+
+/* =========================================================
+   OTRAS EMPRESAS (banners cruzados)
+   Tras comprar/ingresar, se le muestran al cliente eventos de OTRAS
+   empresas distintas a la que compró, a modo de publicidad cruzada.
+========================================================= */
+const OtrasEmpresas = {
+  async renderEn(container, empresaIdActual){
+    const wrap = document.createElement('div');
+    wrap.className = 'banners-otras-empresas';
+    wrap.innerHTML = `<div class="card"><div class="section-title"><h2 style="font-size:16px;">También puede interesarte</h2></div><div class="otras-lista" id="otrasEmpresasLista"><p class="hint">Cargando…</p></div></div>`;
+    container.appendChild(wrap);
+    let q = sb.from('eventos').select('*, empresas(nombre_empresa, slug)').eq('estado','activo').order('created_at',{ascending:false}).limit(10);
+    const {data, error} = await q;
+    const lista = document.getElementById('otrasEmpresasLista');
+    if(!lista) return;
+    const eventos = (!error && data) ? data.filter(e=>!empresaIdActual || e.empresa_id !== empresaIdActual) : [];
+    if(!eventos.length){ wrap.remove(); return; }
+    lista.innerHTML = eventos.slice(0,8).map(e=>{
+      const empresaNombre = e.empresas && e.empresas.nombre_empresa || '';
+      const img = e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy">` : `<div class="evt-slide-fallback" style="height:90px; font-size:12px;">${escapeHtml(e.nombre)}</div>`;
+      return `<div class="otra-card" onclick="EventSlider.selectEvento && OtrasEmpresas.irAEvento('${e.id}')">
+        ${img}
+        <div class="otra-body"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(empresaNombre)}</span></div>
+      </div>`;
+    }).join('');
+    this._cache = eventos;
+  },
+  irAEvento(id){
+    const evento = (this._cache||[]).find(e=>e.id===id);
+    if(!evento) return;
+    // Cierra la sesión de compra actual y pasa directo a la confirmación
+    // de cliente para el nuevo evento (sin depender del slider del landing).
+    Auth.role = null; Auth.identity = null;
+    try{ localStorage.removeItem(AUTH_STORAGE_KEY); }catch(e){}
+    AutoRefresh.stopAll();
+    document.getElementById('btnLogout').classList.add('hide');
+    document.getElementById('roleBadgeWrap').innerHTML='';
+    document.getElementById('evtPillWrap').innerHTML='';
+    EventSlider.pendingEvento = evento;
+    document.getElementById('confirmaEventoNombre').textContent = evento.nombre;
+    Router.go('confirma-cliente');
   }
 };
 
@@ -3180,6 +3349,7 @@ const UsuarioApp = {
       const el = document.getElementById('qr-'+t.id);
       if(el) renderQR(el, JSON.stringify({codigo:t.codigo, evento:t.evento_id}));
     });
+    OtrasEmpresas.renderEn(box, this.evento && this.evento.empresa_id);
   },
   // Comparte los datos del ticket usando el share sheet nativo del dispositivo
   // (WhatsApp, Mensajes, etc.) y si el navegador no lo soporta, abre WhatsApp Web.
@@ -3799,10 +3969,45 @@ const AdminApp = {
   tickets: [],
   comprasAlert: {count:0, lastId:null, revisada:true},
   ticketsPorSolicitud: {},
+  toggleRegistroEmpresa(){
+    const wrap = document.getElementById('registroEmpresaWrap');
+    const link = document.getElementById('registroEmpresaToggle');
+    const abierto = !wrap.classList.contains('hide');
+    wrap.classList.toggle('hide', abierto);
+    link.textContent = abierto ? '¿Tu empresa aún no está registrada? Regístrala aquí' : 'Ya tengo cuenta, volver a iniciar sesión';
+  },
+  async registrarEmpresa(){
+    const nombre_empresa = document.getElementById('regEmpNombre').value.trim();
+    const correo = document.getElementById('regEmpCorreo').value.trim();
+    const usuario = (document.getElementById('adminUser').value||'').trim();
+    const password = document.getElementById('adminPass').value;
+    if(!nombre_empresa || !correo || !usuario || !password){ toast('Completa nombre de empresa, correo, usuario y contraseña', true); return; }
+    let slug = Empresa.slugify(nombre_empresa);
+    // Evita choques de slug si ya existe una empresa con un nombre parecido.
+    const {data: existente} = await sb.from('empresas').select('id').eq('slug', slug);
+    if(existente && existente.length) slug = slug + '-' + Math.floor(Math.random()*9000+1000);
+    const {data, error} = await sb.from('empresas').insert({nombre_empresa, correo, usuario, password, slug}).select();
+    if(error){ toast('Error registrando la empresa: '+error.message, true); return; }
+    Empresa.current = data[0];
+    Auth.setRole('admin', {empresa_id: Empresa.current.id, usuario}, 'Admin · '+Empresa.current.nombre_empresa);
+    toast('¡Empresa registrada! Tu enlace: '+location.origin+'/'+slug);
+    Router.go('admin');
+    await this.loadEventos();
+    this.tab('a-empresa');
+    this.iniciarMonitorCompras();
+  },
   async login(){
+    const usuario = (document.getElementById('adminUser').value||'').trim();
     const pass = document.getElementById('adminPass').value;
-    if(pass !== ADMIN_PASSWORD){ toast('Clave incorrecta', true); return; }
-    Auth.setRole('admin', {}, 'Admin');
+    if(!usuario || !pass){ toast('Ingresa usuario y contraseña', true); return; }
+    let q = sb.from('empresas').select('*').eq('usuario', usuario).eq('password', pass);
+    // Si se entró por dominio.com/<empresa>, la sesión queda restringida a
+    // esa empresa: no se puede iniciar sesión con el usuario de otra.
+    if(Empresa.routeSlug) q = q.eq('slug', Empresa.routeSlug);
+    const {data, error} = await q.limit(1);
+    if(error || !data || !data.length){ toast('Usuario o contraseña incorrectos', true); return; }
+    Empresa.current = data[0];
+    Auth.setRole('admin', {empresa_id: Empresa.current.id, usuario}, 'Admin · '+Empresa.current.nombre_empresa);
     Router.go('admin');
     await this.loadEventos();
     this.tab('a-eventos');
@@ -3841,10 +4046,57 @@ const AdminApp = {
     tabEl.classList.toggle('tab-alert', this.comprasAlert.count>0 && !this.comprasAlert.revisada);
   },
   async loadEventos(){
-    this.eventos = await DB.eventos();
+    // El admin solo ve y administra los eventos de SU propia empresa.
+    const empresaId = Empresa.current && Empresa.current.id;
+    let q = sb.from('eventos').select('*').order('created_at',{ascending:false});
+    if(empresaId) q = q.eq('empresa_id', empresaId);
+    const {data, error} = await q;
+    this.eventos = (!error && data) ? data : [];
     if(!this.evento && this.eventos.length) this.evento = this.eventos.find(e=>e.estado==='activo') || this.eventos[0];
     renderEventPill(this.evento);
     if(this.evento) this.tickets = await DB.ticketsByEvento(this.evento.id);
+  },
+  /* ---------- Datos de la empresa (registro / edición) ---------- */
+  renderEmpresa(){
+    const box = document.getElementById('a-empresa');
+    const emp = Empresa.current;
+    if(!emp){ box.innerHTML = `<div class="card"><p class="hint">No se pudo cargar la información de tu empresa.</p></div>`; return; }
+    box.innerHTML = `
+      <div class="card" style="max-width:520px;">
+        <div class="section-title"><h2 style="font-size:19px;">Datos de mi empresa</h2></div>
+        <p class="hint" style="margin-bottom:14px;">Este es el enlace directo al panel de tu empresa: <br><b class="mono" style="word-break:break-all;">${escapeHtml(location.origin)}/${escapeHtml(emp.slug)}</b></p>
+        <div class="field"><label>Nombre de la empresa</label><input id="empNombre" value="${escapeHtml(emp.nombre_empresa||'')}"></div>
+        <div class="field"><label>Correo</label><input id="empCorreo" type="email" value="${escapeHtml(emp.correo||'')}"></div>
+        <div class="field"><label>Usuario</label><input id="empUsuario" value="${escapeHtml(emp.usuario||'')}"></div>
+        <div class="field"><label>Nueva contraseña</label><input id="empPassword" type="password" placeholder="dejar en blanco para no cambiarla"></div>
+        <button class="btn btn-primary btn-block" onclick="AdminApp.guardarEmpresa()">Guardar cambios</button>
+      </div>`;
+  },
+  async guardarEmpresa(){
+    const emp = Empresa.current;
+    if(!emp) return;
+    const nombre_empresa = document.getElementById('empNombre').value.trim();
+    const correo = document.getElementById('empCorreo').value.trim();
+    const usuario = document.getElementById('empUsuario').value.trim();
+    const nuevaPass = document.getElementById('empPassword').value;
+    if(!nombre_empresa || !correo || !usuario){ toast('Completa nombre, correo y usuario', true); return; }
+    const cambios = {nombre_empresa, correo, usuario};
+    if(nuevaPass) cambios.password = nuevaPass;
+    // El slug (usado en la URL dominio.com/<slug>) no cambia al editar,
+    // para no invalidar enlaces que la empresa ya haya compartido.
+    const {data, error} = await sb.from('empresas').update(cambios).eq('id', emp.id).select();
+    if(error){ toast('Error guardando: '+error.message, true); return; }
+    Empresa.current = data[0];
+    // Refresca el nombre mostrado en la insignia de rol.
+    Auth.identity = Auth.identity || {};
+    Auth.identity.usuario = usuario;
+    document.getElementById('roleBadgeWrap').innerHTML = `<span class="role-badge">Admin · ${escapeHtml(Empresa.current.nombre_empresa)}</span>`;
+    try{
+      const saved = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY)||'null');
+      if(saved){ saved.label = 'Admin · '+Empresa.current.nombre_empresa; saved.identity.usuario = usuario; localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(saved)); }
+    }catch(e){}
+    toast('Datos de la empresa actualizados');
+    this.renderEmpresa();
   },
   tab(name){
     document.querySelectorAll('#view-admin .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
@@ -3862,6 +4114,7 @@ const AdminApp = {
       this.actualizarBadgeCompras();
     }
     if(name==='a-chat') this.renderChat();
+    if(name==='a-empresa') this.renderEmpresa();
     // Refresco en tiempo real de las pestañas con datos que cambian seguido.
     AutoRefresh.stop('admin-tab');
     if(name==='a-tickets') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-tickets') this.renderTickets(); }, 20000);
@@ -4596,7 +4849,8 @@ const AdminApp = {
       try{ imagen_url = await uploadToBucket('eventos', imgFile, codigo); }
       catch(e){ console.error(e); toast('El evento se creará, pero no se pudo subir la imagen: '+e.message, true); }
     }
-    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url}).select();
+    const empresa_id = Empresa.current && Empresa.current.id;
+    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url, empresa_id}).select();
     if(error){ toast('Error creando el evento: '+error.message, true); console.error(error); return; }
     toast('Evento creado: '+codigo);
     delete this._catState['nuevo'];
@@ -5924,7 +6178,11 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   // Intenta reingresar automáticamente si había una sesión guardada en este
   // navegador (para no pedir login otra vez tras cerrar/reabrir el explorador).
   const restored = await Auth.restore().catch(()=>false);
-  if(!restored) Router.go('landing');
+  if(!restored){
+    // Si la URL es dominio.com/<empresa>, va directo al login de esa empresa.
+    const fueRuta = await Empresa.initFromURL().catch(()=>false);
+    if(!fueRuta) Router.go('landing');
+  }
   checkBoldReturn();
   const params = new URLSearchParams(location.search);
   if(params.get('validar')==='1'){
