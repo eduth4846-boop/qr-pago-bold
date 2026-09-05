@@ -453,6 +453,60 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .map-zone .zhandle{position:relative;}
 .map-zone .zrename{margin-left:5px; opacity:.55; cursor:pointer; font-size:9px;}
 .map-zone .zrename:hover{opacity:1;}
+.map-zone .zshape, .map-zone .zfloor{margin-left:5px; opacity:.55; cursor:pointer; font-size:9px;}
+.map-zone .zshape:hover, .map-zone .zfloor:hover{opacity:1;}
+.map-zone .zgrid-viewport{position:relative; flex:1; overflow:hidden;}
+.map-zone .zgrid{position:absolute; left:0; top:0;}
+.map-zone .zresize{
+  position:absolute; right:-4px; bottom:-4px; width:10px; height:10px; background:var(--cyan); border-radius:2px;
+  cursor:nwse-resize; display:none; z-index:81; box-shadow:0 0 5px rgba(0,240,255,.7);
+}
+.map-zone.editable:hover .zresize{display:block;}
+.map-zone.shape-redondo{border-radius:50%;}
+.map-zone.shape-cuadrado{border-radius:8px;}
+.map-zone.shape-libre{border-radius:0;}
+.zmenu{
+  position:absolute; z-index:150; background:#150f28; border:1px solid var(--cyan); border-radius:8px;
+  padding:5px; display:flex; flex-direction:column; gap:1px; box-shadow:0 0 14px rgba(0,240,255,.4); min-width:140px;
+}
+.zmenu button{
+  background:transparent; border:none; color:var(--text); font-size:11px; text-align:left; padding:6px 9px;
+  border-radius:5px; cursor:pointer; white-space:nowrap; font-family:'Rajdhani',sans-serif; font-weight:600;
+}
+.zmenu button:hover{background:rgba(0,240,255,.15); color:var(--cyan);}
+.zmenu button.active{color:var(--lime);}
+.zmenu button.danger:hover{background:rgba(255,61,110,.15); color:var(--bad);}
+.zpoint{
+  position:absolute; width:11px; height:11px; margin-left:-5.5px; margin-top:-5.5px; background:var(--gold);
+  border:1px solid #fff; border-radius:50%; cursor:grab; z-index:141; box-shadow:0 0 6px rgba(255,213,77,.8); touch-action:none;
+}
+.zpoint.dragging{cursor:grabbing; z-index:142;}
+.map-zone.editing-points{z-index:90; box-shadow:0 0 0 2px var(--gold), 0 10px 28px rgba(0,0,0,.55);}
+.zpoints-toolbar{
+  position:absolute; z-index:143; display:flex; gap:4px; background:#150f28; border:1px solid var(--gold);
+  border-radius:6px; padding:4px; box-shadow:0 0 10px rgba(255,213,77,.5); white-space:nowrap;
+}
+.zpoints-toolbar button{
+  background:transparent; border:none; color:var(--text); font-size:10px; padding:4px 7px; border-radius:4px; cursor:pointer;
+  font-family:'Rajdhani',sans-serif; font-weight:700;
+}
+.zpoints-toolbar button:hover{background:rgba(255,213,77,.15); color:var(--gold);}
+.map-piso-tabs{display:flex; gap:6px; flex-wrap:wrap; justify-content:center; max-width:640px; margin:0 auto 10px; align-items:center;}
+.map-piso-tabs button{
+  background:var(--panel); border:1px solid var(--line-soft); color:var(--text-dim); font-size:11.5px;
+  padding:6px 14px; border-radius:20px; cursor:pointer; font-family:'Rajdhani',sans-serif; font-weight:700;
+  letter-spacing:.04em; display:flex; align-items:center; gap:6px;
+}
+.map-piso-tabs button.active{background:var(--violet); color:#fff; border-color:var(--violet); box-shadow:var(--glow-violet);}
+.map-piso-tabs button.add-piso{border-style:dashed; color:var(--cyan); border-color:var(--cyan);}
+.map-piso-tabs .piso-del{opacity:.7; font-size:10px;}
+.map-piso-tabs .piso-del:hover{opacity:1; color:var(--bad);}
+.map-obj .obj-floor{
+  position:absolute; top:-8px; left:10px; width:15px; height:15px; border-radius:50%; background:var(--cyan);
+  color:#08050f; font-size:8px; line-height:15px; text-align:center; cursor:pointer; display:none;
+  box-shadow:0 0 6px rgba(0,240,255,.7); z-index:6;
+}
+.map-obj.editable:hover .obj-floor{display:block;}
 
 /* ---------- decorative 3D map objects (muros, árboles, casas, grupos) ---------- */
 .map-objects-toolbar{display:flex; gap:6px; flex-wrap:wrap; justify-content:center; max-width:640px; margin:0 auto 10px;}
@@ -1864,6 +1918,7 @@ const CategoriaServicio = {
 const MapView = {
   BASE_W: 560,
   SEAT: 16, GAP: 3, PAD: 5, HANDLE_H: 15,
+  _pisoActivo: {}, // { eventoId: pisoId } — recuerda el piso que el usuario está viendo (solo en memoria)
 
   boxSize(cols, rows){
     const w = this.PAD*2 + cols*this.SEAT + (cols-1)*this.GAP;
@@ -1905,7 +1960,126 @@ const MapView = {
     if(tt) tt.style.display = 'none';
   },
 
-  async render(container, eventoId, myTicket, opts){
+  /* =======================================================
+     PISOS (múltiples niveles del recinto: planta baja, 2do piso, etc.)
+     Se guardan en evento.mapa.pisos = [{id, nombre, fondo, layout}, ...]
+     Por compatibilidad con eventos antiguos que no tenían pisos, si el
+     arreglo no existe se construye uno solo a partir de mapa.fondo/mapa.layout.
+  ======================================================= */
+  pisosOf(mapa){
+    mapa = mapa || {};
+    if(mapa.pisos && mapa.pisos.length) return mapa.pisos;
+    return [{id:'piso1', nombre:'Piso 1', fondo: mapa.fondo || null, layout: {...(mapa.layout||{})}}];
+  },
+  // Devuelve una copia mutable del arreglo de pisos, lista para guardar.
+  clonePisos(evento){
+    return this.pisosOf(evento && evento.mapa).map(p=>({...p, fondo:p.fondo?{...p.fondo}:null, layout:{...(p.layout||{})}}));
+  },
+
+  async addPiso(eventoId, evento){
+    const pisos = this.clonePisos(evento);
+    const n = pisos.length + 1;
+    pisos.push({id:'piso'+Date.now(), nombre:'Piso '+n, fondo:null, layout:{}});
+    const nuevoMapa = {...(evento.mapa||{}), pisos};
+    delete nuevoMapa.fondo; delete nuevoMapa.layout;
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo agregar el piso', true); return null; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
+    toast('Piso agregado');
+    return pisos[pisos.length-1].id;
+  },
+
+  async removePiso(eventoId, evento, pisoId){
+    let pisos = this.clonePisos(evento);
+    if(pisos.length<=1) return;
+    pisos = pisos.filter(p=>p.id!==pisoId);
+    const primerPiso = pisos[0].id;
+    // Las ubicaciones y objetos que estaban en el piso borrado vuelven al primer piso.
+    const pisoDeZona = {...((evento.mapa&&evento.mapa.pisoDeZona)||{})};
+    Object.keys(pisoDeZona).forEach(k=>{ if(pisoDeZona[k]===pisoId) pisoDeZona[k] = primerPiso; });
+    const objetos = ((evento.mapa&&evento.mapa.objetos)||[]).map(o=> o.piso===pisoId ? {...o, piso:primerPiso} : {...o});
+    const nuevoMapa = {...(evento.mapa||{}), pisos, pisoDeZona, objetos};
+    delete nuevoMapa.fondo; delete nuevoMapa.layout;
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo eliminar el piso', true); return; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
+    if(this._pisoActivo[eventoId]===pisoId) this._pisoActivo[eventoId] = primerPiso;
+    toast('Piso eliminado');
+  },
+
+  async renamePiso(eventoId, evento, pisoId, nombre){
+    const pisos = this.clonePisos(evento);
+    const p = pisos.find(pp=>pp.id===pisoId);
+    if(!p) return;
+    p.nombre = nombre;
+    const nuevoMapa = {...(evento.mapa||{}), pisos};
+    delete nuevoMapa.fondo; delete nuevoMapa.layout;
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo renombrar el piso', true); return; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
+  },
+
+  // Mueve una ubicación (palco/zona/categoría) a otro piso.
+  async saveZonaPiso(eventoId, evento, key, pisoId){
+    const pisoDeZona = {...((evento.mapa&&evento.mapa.pisoDeZona)||{}), [key]: pisoId};
+    const nuevoMapa = {...(evento.mapa||{}), pisoDeZona};
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo mover la ubicación de piso', true); return; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
+    toast('Ubicación movida de piso');
+  },
+
+  /* =======================================================
+     FORMA de las ubicaciones: rectangular, cuadrada, redonda o
+     diseño libre (polígono suavizado a partir de puntos flexibles).
+  ======================================================= */
+  defaultPuntosLibres(){
+    return [[0,0],[100,0],[100,100],[0,100]];
+  },
+  // Construye un "path" SVG suave (spline Catmull-Rom) a partir de puntos
+  // porcentuales (0-100) para usarlo como clip-path y lograr formas curvas.
+  smoothPathFromPoints(puntos, w, h){
+    const pts = (puntos && puntos.length>=3 ? puntos : this.defaultPuntosLibres()).map(p=>[p[0]/100*w, p[1]/100*h]);
+    const n = pts.length;
+    const get = i => pts[(i%n+n)%n];
+    let d = `M ${get(0)[0].toFixed(1)},${get(0)[1].toFixed(1)} `;
+    for(let i=0;i<n;i++){
+      const p0=get(i-1), p1=get(i), p2=get(i+1), p3=get(i+2);
+      const c1x = p1[0] + (p2[0]-p0[0])/6, c1y = p1[1] + (p2[1]-p0[1])/6;
+      const c2x = p2[0] - (p3[0]-p1[0])/6, c2y = p2[1] - (p3[1]-p1[1])/6;
+      d += `C ${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)} `;
+    }
+    return d + 'Z';
+  },
+  async saveForma(eventoId, evento, key, forma){
+    const formaMap = {...((evento.mapa&&evento.mapa.forma)||{}), [key]: forma};
+    const nuevoMapa = {...(evento.mapa||{}), forma: formaMap};
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo guardar la forma', true); return; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
+  },
+
+  // Tamaño personalizado (ancho/alto en px) de una ubicación.
+  async saveTam(eventoId, evento, key, tam){
+    const tamMap = {...((evento.mapa&&evento.mapa.tam)||{}), [key]: tam};
+    const nuevoMapa = {...(evento.mapa||{}), tam: tamMap};
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo guardar el tamaño', true); return; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
+  },
+
+  // Cierra cualquier menú flotante (⚙ forma / 🏢 piso) abierto en el mapa.
+  closeFloatingMenus(){
+    document.querySelectorAll('.zmenu, .zpoints-toolbar').forEach(el=>el.remove());
+  },
+
+  async render(container, eventoId, myTicket, opts, forcePisoId){
     opts = opts || {};
     const editable = !!opts.editable;
     container.innerHTML = `<div class="hint" style="padding:20px;">Cargando mapa del evento…</div>`;
@@ -1917,10 +2091,21 @@ const MapView = {
     ]);
     const evento = eventoRows && eventoRows[0];
     const mapa = (evento && evento.mapa) || {};
-    const layout = {...(mapa.layout || {})};
+    const pisos = this.pisosOf(mapa);
+    if(forcePisoId) this._pisoActivo[eventoId] = forcePisoId;
+    let pisoActivo = this._pisoActivo[eventoId];
+    if(!pisoActivo || !pisos.find(p=>p.id===pisoActivo)) pisoActivo = pisos[0].id;
+    this._pisoActivo[eventoId] = pisoActivo;
+    const pisoObj = pisos.find(p=>p.id===pisoActivo) || pisos[0];
+    const pisoDeZona = mapa.pisoDeZona || {};
+    const tamMap = mapa.tam || {};
+    const formaMap = mapa.forma || {};
+
+    const layout = {...(pisoObj.layout || {})};
     const nombresMap = mapa.nombres || {};
-    const objetos = (mapa.objetos || []).map(o=>({...o}));
-    const fondo = mapa.fondo || null; // {src, w, h, opacidad} — imagen del plano subida por el admin
+    const objetosGlobal = (mapa.objetos || []).map(o=>({...o}));
+    const objetos = objetosGlobal.filter(o=> (o.piso || pisos[0].id) === pisoActivo);
+    const fondo = pisoObj.fondo || null; // {src, w, h, opacidad} — imagen del plano subida por el admin
 
     const palcos = {}; let vipTaken=0, vipTotal=0, generalTaken=0, generalTotal=0;
     const vipSeats = [];
@@ -1943,16 +2128,16 @@ const MapView = {
     // ---- build zone definitions (key, label, cols, rows, seat list) ----
     // Cada zona guarda además "baseLabel" (el nombre editable, sin el conteo de
     // ocupación) para poder ofrecer el botón de renombrar en modo editor.
-    const zones = [];
+    const zonesTodas = [];
     palcoKeys.forEach(p=>{
       const seats = palcos[p].sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
       const zkey = 'P_'+p;
       const base = nombresMap[zkey] || p;
-      zones.push({key:zkey, label:base, baseLabel:base, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'palco'});
+      zonesTodas.push({key:zkey, label:base, baseLabel:base, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'palco'});
     });
     {
       const base = nombresMap['VIP'] || 'Zona VIP';
-      zones.push({
+      zonesTodas.push({
         key:'VIP', label:`${base.toUpperCase()} (${vipTaken}/${vipTotal})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(vipTotal/10)),
         seats:vipSeats, kind:'vip', empty: vipTotal===0
       });
@@ -1960,7 +2145,7 @@ const MapView = {
     const generalSeats = Array.from({length:Math.min(generalTotal,120)}).map((_,i)=> asientos.find(a=>a.zona==='general' && a.numero===`G${i+1}`)).filter(Boolean);
     {
       const base = nombresMap['GENERAL'] || 'General';
-      zones.push({
+      zonesTodas.push({
         key:'GENERAL', label:`${base.toUpperCase()} (${generalTaken}/${generalTotal})`, baseLabel:base, cols:12, rows:Math.max(1,Math.ceil(generalSeats.length/12)),
         seats:generalSeats, kind:'general', empty: generalTotal===0
       });
@@ -1968,26 +2153,36 @@ const MapView = {
     // Categorías personalizadas: numeradas se dibujan como grilla individual (tipo VIP);
     // no numeradas como zona agrupada (tipo General).
     const categoriasPersonalizadas = mapa.categorias || [];
-    const customZoneKeys = [];
+    const customZoneKeysAll = [];
     categoriasPersonalizadas.forEach(c=>{
       const seatsCat = asientos.filter(a=>a.zona===c.id);
       const taken = seatsCat.filter(a=>a.ocupado).length;
       const total = seatsCat.length;
       const zkey = 'CAT_'+c.id;
-      customZoneKeys.push(zkey);
+      customZoneKeysAll.push(zkey);
       const base = nombresMap[zkey] || c.nombre || 'Categoría';
       if(c.numerada){
         const sorted = seatsCat.slice().sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
-        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(total/10)), seats:sorted, kind:'custom', customLabel:base, empty: total===0});
+        zonesTodas.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(total/10)), seats:sorted, kind:'custom', customLabel:base, empty: total===0});
       } else {
         const pooled = seatsCat.slice(0, Math.min(total,120));
-        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:12, rows:Math.max(1,Math.ceil(pooled.length/12)), seats:pooled, kind:'custom', customLabel:base, empty: total===0});
+        zonesTodas.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:12, rows:Math.max(1,Math.ceil(pooled.length/12)), seats:pooled, kind:'custom', customLabel:base, empty: total===0});
       }
     });
 
+    // ---- filtra según el piso que se está viendo ----
+    const zones = zonesTodas.filter(z => (pisoDeZona[z.key] || pisos[0].id) === pisoActivo);
+    const customZoneKeys = zones.filter(z=>z.kind==='custom').map(z=>z.key);
+
     // ---- sizes & default packed positions ----
     const stageW = 220, stageH = 32;
-    zones.forEach(z=>{ const {w,h} = this.boxSize(z.cols, z.rows); z.w = w; z.h = h; });
+    zones.forEach(z=>{
+      const {w,h} = this.boxSize(z.cols, z.rows);
+      z.wNat = w; z.hNat = h;
+      const override = tamMap[z.key];
+      z.w = (override && override.w) || w;
+      z.h = (override && override.h) || h;
+    });
 
     const canvasW = this.BASE_W;
     const stagePos = (layout.STAGE) || {x: Math.round((canvasW-stageW)/2), y: 6};
@@ -2019,6 +2214,11 @@ const MapView = {
       canvasWfinal = Math.max(canvasWfinal, fondo.w);
       canvasH = Math.max(canvasH, fondo.h);
     }
+    // Zonas con tamaño personalizado también pueden salirse del área calculada.
+    zones.forEach(z=>{
+      canvasH = Math.max(canvasH, z.pos.y + z.h + 24);
+      canvasWfinal = Math.max(canvasWfinal, z.pos.x + z.w + 24);
+    });
 
     // ---- mesas: calcular disponibilidad de la categoría vendible vinculada ----
     const mesaEstado = {};
@@ -2028,6 +2228,9 @@ const MapView = {
       const miAsiento = myNum ? deLaCategoria.find(a=>a.numero===myNum) : null;
       mesaEstado[o.id] = {total:deLaCategoria.length, libres:libres.length, siguienteLibre: libres[0]||null, esTuya: !!miAsiento};
     });
+
+    // ---- estado local de edición de puntos (forma libre) para esta pintura ----
+    const editingPointsKey = this._editingPoints && this._editingPoints[eventoId];
 
     // ---- render HTML ----
     const seatEl = (s, extraTitle)=>{
@@ -2046,9 +2249,22 @@ const MapView = {
         }).join('');
       }
       const renameBtn = editable ? `<span class="zrename" data-current="${escapeHtml(z.baseLabel||z.label)}" title="Renombrar esta ubicación">✏️</span>` : '';
-      return `<div class="map-zone ${editable?'editable':''}" data-key="${z.key}" style="left:${z.pos.x}px; top:${z.pos.y}px; width:${z.w}px;">
-        <div class="zhandle" data-zone-label="${escapeHtml(z.label)}">${escapeHtml(z.label)}${renameBtn}</div>
-        <div class="zgrid" style="grid-template-columns:repeat(${z.cols},1fr);">${inner}</div>
+      const shapeBtn = editable ? `<span class="zshape" data-key="${z.key}" title="Cambiar forma / tamaño">⬠</span>` : '';
+      const floorBtn = (editable && pisos.length>1) ? `<span class="zfloor" data-key="${z.key}" title="Mover a otro piso">🏢</span>` : '';
+      const forma = formaMap[z.key] || {tipo:'rectangular'};
+      const shapeClass = forma.tipo==='redondo' ? 'shape-redondo' : (forma.tipo==='cuadrado' ? 'shape-cuadrado' : (forma.tipo==='libre' ? 'shape-libre' : ''));
+      const clipStyle = forma.tipo==='libre' ? `clip-path: path('${this.smoothPathFromPoints(forma.puntos, z.w, z.h)}');` : '';
+      const editingCls = (editable && editingPointsKey===z.key) ? 'editing-points' : '';
+      const gridH = Math.max(10, z.h - this.HANDLE_H);
+      const gridNatH = Math.max(10, z.hNat - this.HANDLE_H);
+      const sx = (z.w / z.wNat);
+      const sy = (gridH / gridNatH);
+      return `<div class="map-zone ${editable?'editable':''} ${shapeClass} ${editingCls}" data-key="${z.key}" style="left:${z.pos.x}px; top:${z.pos.y}px; width:${z.w}px; height:${z.h}px; ${clipStyle}">
+        <div class="zhandle" data-zone-label="${escapeHtml(z.label)}">${escapeHtml(z.label)}${renameBtn}${shapeBtn}${floorBtn}</div>
+        <div class="zgrid-viewport" style="height:${gridH}px;">
+          <div class="zgrid" style="width:${z.wNat}px; height:${gridNatH}px; grid-template-columns:repeat(${z.cols},1fr); transform:scale(${sx.toFixed(4)},${sy.toFixed(4)}); transform-origin:top left;">${inner}</div>
+        </div>
+        ${editable ? `<div class="zresize" data-key="${z.key}" title="Arrastra para cambiar ancho/alto"></div>` : ''}
       </div>`;
     }).join('');
 
@@ -2081,13 +2297,21 @@ const MapView = {
         ${objBodyHtml(o)}
         ${o.label && o.tipo!=='mesa' ? `<div class="obj-label">${escapeHtml(o.label)}</div>` : ''}
         ${editable && o.tipo==='mesa' ? `<div class="obj-cfg" title="Configurar mesa">⚙</div>` : ''}
+        ${editable && pisos.length>1 ? `<div class="obj-floor" title="Mover a otro piso">🏢</div>` : ''}
         ${editable ? `<div class="obj-del" title="Eliminar">✕</div><div class="obj-resize" title="Arrastra para redimensionar"></div>` : ''}
       </div>`).join('');
     const fondoHtml = fondo && fondo.src ? `<img class="map-fondo-img" src="${fondo.src}" style="width:${fondo.w}px; height:${fondo.h}px; opacity:${fondo.opacidad!=null?fondo.opacidad:1};">` : '';
 
+    const pisosTabsHtml = (pisos.length>1 || editable) ? `
+      <div class="map-piso-tabs" id="mapPisoTabs">
+        ${pisos.map(p=>`<button class="${p.id===pisoActivo?'active':''}" data-piso="${p.id}" title="${editable?'Doble clic para renombrar':''}">${escapeHtml(p.nombre)}${(editable && p.id!==pisos[0].id) ? ` <span class="piso-del" data-piso-del="${p.id}" title="Eliminar este piso">✕</span>` : ''}</button>`).join('')}
+        ${(editable && pisos.length<2) ? `<button class="add-piso" id="mapAddPiso">➕ Agregar segundo piso</button>` : ''}
+      </div>` : '';
+
     container.innerHTML = `
+      ${pisosTabsHtml}
       <div class="map-canvas-toolbar">
-        <p class="hint">${editable ? 'Editor de mapa' : 'Mapa del evento'}</p>
+        <p class="hint">${editable ? 'Editor de mapa' : 'Mapa del evento'}${pisos.length>1 ? ' · '+escapeHtml(pisoObj.nombre) : ''}</p>
         ${editable ? `<div style="display:flex; gap:8px;"><button class="btn btn-sm" id="mapResetBtn">Restablecer orden</button></div>` : ''}
       </div>
       ${editable ? `
@@ -2097,7 +2321,7 @@ const MapView = {
         <span class="mf-opacity">Opacidad <input type="range" id="mapFondoOpacidad" min="20" max="100" value="${Math.round((fondo.opacidad!=null?fondo.opacidad:1)*100)}"></span>` : ''}
       </div>
       <div class="map-objects-toolbar" id="mapObjToolbar">
-        <p class="hint2">Objetos del plano (arrástralos, redimensiona por la esquina, ✕ para borrar):</p>
+        <p class="hint2">Objetos del plano (arrástralos, redimensiona por la esquina, ✕ para borrar). Usa ⬠ en cada ubicación para cambiar su tamaño y forma (cuadrada, redonda, rectangular o diseño libre con puntos):</p>
         <button class="btn btn-sm" type="button" data-tipo="muro">➕ Muro</button>
         <button class="btn btn-sm" type="button" data-tipo="arbol">➕ Árbol</button>
         <button class="btn btn-sm" type="button" data-tipo="casa">➕ Casa</button>
@@ -2117,6 +2341,43 @@ const MapView = {
           <div class="lg"><span class="seat you" style="width:11px;height:11px;"></span> Tu ubicación</div>
         </div>
       </div>`;
+
+    // ---- pisos: cambiar de pestaña, agregar o eliminar ----
+    const pisoTabsEl = document.getElementById('mapPisoTabs');
+    if(pisoTabsEl){
+      pisoTabsEl.querySelectorAll('button[data-piso]').forEach(btn=>{
+        btn.addEventListener('click', (e)=>{
+          if(e.target.closest('.piso-del')) return;
+          MapView.render(container, eventoId, myTicket, opts, btn.dataset.piso);
+        });
+        if(editable){
+          btn.addEventListener('dblclick', async (e)=>{
+            e.stopPropagation();
+            const pisoId = btn.dataset.piso;
+            const actual = (pisos.find(p=>p.id===pisoId)||{}).nombre || '';
+            const nombre = prompt('Nuevo nombre para este piso:', actual);
+            if(nombre===null) return;
+            const limpio = nombre.trim();
+            if(!limpio) return;
+            await MapView.renamePiso(eventoId, evento, pisoId, limpio);
+            MapView.render(container, eventoId, myTicket, opts, pisoActivo);
+          });
+        }
+      });
+      pisoTabsEl.querySelectorAll('.piso-del').forEach(span=>{
+        span.addEventListener('click', async (e)=>{
+          e.stopPropagation();
+          if(!confirm('¿Eliminar este piso? Sus ubicaciones y objetos volverán al primer piso.')) return;
+          await MapView.removePiso(eventoId, evento, span.dataset.pisoDel);
+          MapView.render(container, eventoId, myTicket, opts);
+        });
+      });
+      const addPisoBtn = document.getElementById('mapAddPiso');
+      if(addPisoBtn) addPisoBtn.addEventListener('click', async ()=>{
+        const nuevoId = await MapView.addPiso(eventoId, evento);
+        if(nuevoId) MapView.render(container, eventoId, myTicket, opts, nuevoId);
+      });
+    }
 
     // ---- seat hover tooltips (both modes) ----
     container.querySelectorAll('.seat[data-info]').forEach(el=>{
@@ -2158,6 +2419,7 @@ const MapView = {
     // ---- drag & drop for admin editor ----
     const canvasEl = document.getElementById('mapCanvasEl');
     let currentLayout = {...layout};
+    let currentObjetos = objetosGlobal.map(o=>({...o})); // incluye TODOS los pisos, se guarda completo
     let dragEl = null, dragKey = null, offX = 0, offY = 0;
 
     container.querySelectorAll('.map-zone.editable .zhandle').forEach(handle=>{
@@ -2166,6 +2428,7 @@ const MapView = {
       handle.addEventListener('mouseleave', ()=> this.hideTip());
 
       handle.addEventListener('pointerdown', e=>{
+        if(e.target.closest('.zrename') || e.target.closest('.zshape') || e.target.closest('.zfloor')) return;
         e.preventDefault();
         dragEl = handle.closest('.map-zone');
         dragKey = dragEl.dataset.key;
@@ -2196,7 +2459,7 @@ const MapView = {
         currentLayout[dragKey] = {x, y};
         dragEl.classList.remove('dragging');
         dragEl = null;
-        await MapView.saveLayout(eventoId, evento, currentLayout);
+        await MapView.saveLayout(eventoId, evento, currentLayout, pisoActivo);
       };
       handle.addEventListener('pointerup', finishDrag);
       handle.addEventListener('pointercancel', finishDrag);
@@ -2226,7 +2489,7 @@ const MapView = {
       if(!dragEl || dragKey!=='STAGE') return;
       currentLayout.STAGE = {x: Math.round(parseFloat(stageEl.style.left)), y: Math.round(parseFloat(stageEl.style.top))};
       dragEl = null;
-      await MapView.saveLayout(eventoId, evento, currentLayout);
+      await MapView.saveLayout(eventoId, evento, currentLayout, pisoActivo);
     };
     stageEl.addEventListener('pointerup', finishStageDrag);
     stageEl.addEventListener('pointercancel', finishStageDrag);
@@ -2234,8 +2497,8 @@ const MapView = {
     const resetBtn = document.getElementById('mapResetBtn');
     if(resetBtn) resetBtn.addEventListener('click', async ()=>{
       currentLayout = {};
-      await MapView.saveLayout(eventoId, evento, currentLayout);
-      MapView.render(container, eventoId, myTicket, opts);
+      await MapView.saveLayout(eventoId, evento, currentLayout, pisoActivo);
+      MapView.render(container, eventoId, myTicket, opts, pisoActivo);
     });
 
     // ---- renombrar palcos/ubicaciones directamente desde el mapa ----
@@ -2251,9 +2514,196 @@ const MapView = {
         const nombre = nuevo.trim();
         if(!nombre) return;
         await MapView.renameZone(eventoId, evento, key, nombre);
-        MapView.render(container, eventoId, myTicket, opts);
+        MapView.render(container, eventoId, myTicket, opts, pisoActivo);
       });
     });
+
+    // ---- forma y tamaño de cada ubicación (⬠): menú con las 4 opciones de forma ----
+    container.querySelectorAll('.map-zone.editable .zshape').forEach(span=>{
+      span.addEventListener('pointerdown', e=> e.stopPropagation());
+      span.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        MapView.closeFloatingMenus();
+        const key = span.dataset.key;
+        const formaActual = (formaMap[key]||{tipo:'rectangular'}).tipo;
+        const menu = document.createElement('div');
+        menu.className = 'zmenu';
+        menu.style.left = (e.clientX + 6) + 'px';
+        menu.style.top = (e.clientY + 6) + 'px';
+        menu.style.position = 'fixed';
+        const opciones = [
+          {tipo:'rectangular', label:'▭ Rectangular'},
+          {tipo:'cuadrado', label:'◻ Cuadrado'},
+          {tipo:'redondo', label:'◯ Redondo'},
+          {tipo:'libre', label:'✎ Diseño libre (curvas)'}
+        ];
+        menu.innerHTML = opciones.map(o=>`<button data-tipo="${o.tipo}" class="${formaActual===o.tipo?'active':''}">${o.label}</button>`).join('');
+        document.body.appendChild(menu);
+        const closeMenu = ()=>{ menu.remove(); document.removeEventListener('pointerdown', outsideClick, true); };
+        const outsideClick = (ev)=>{ if(!menu.contains(ev.target)) closeMenu(); };
+        setTimeout(()=> document.addEventListener('pointerdown', outsideClick, true), 0);
+        menu.querySelectorAll('button[data-tipo]').forEach(btn=>{
+          btn.addEventListener('click', async ()=>{
+            const tipo = btn.dataset.tipo;
+            let forma = {tipo};
+            if(tipo==='libre'){
+              const existente = formaMap[key];
+              forma = {tipo:'libre', puntos: (existente && existente.puntos) || MapView.defaultPuntosLibres()};
+              MapView._editingPoints = MapView._editingPoints || {};
+              MapView._editingPoints[eventoId] = key;
+            }
+            await MapView.saveForma(eventoId, evento, key, forma);
+            closeMenu();
+            MapView.render(container, eventoId, myTicket, opts, pisoActivo);
+          });
+        });
+      });
+    });
+
+    // ---- mover una ubicación a otro piso (🏢) ----
+    container.querySelectorAll('.map-zone.editable .zfloor').forEach(span=>{
+      span.addEventListener('pointerdown', e=> e.stopPropagation());
+      span.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        MapView.closeFloatingMenus();
+        const key = span.dataset.key;
+        const menu = document.createElement('div');
+        menu.className = 'zmenu';
+        menu.style.left = (e.clientX + 6) + 'px';
+        menu.style.top = (e.clientY + 6) + 'px';
+        menu.style.position = 'fixed';
+        menu.innerHTML = pisos.map(p=>`<button data-piso="${p.id}" class="${(pisoDeZona[key]||pisos[0].id)===p.id?'active':''}">${escapeHtml(p.nombre)}</button>`).join('');
+        document.body.appendChild(menu);
+        const closeMenu = ()=>{ menu.remove(); document.removeEventListener('pointerdown', outsideClick, true); };
+        const outsideClick = (ev)=>{ if(!menu.contains(ev.target)) closeMenu(); };
+        setTimeout(()=> document.addEventListener('pointerdown', outsideClick, true), 0);
+        menu.querySelectorAll('button[data-piso]').forEach(btn=>{
+          btn.addEventListener('click', async ()=>{
+            await MapView.saveZonaPiso(eventoId, evento, key, btn.dataset.piso);
+            closeMenu();
+            MapView.render(container, eventoId, myTicket, opts, pisoActivo);
+          });
+        });
+      });
+    });
+
+    // ---- redimensionar una ubicación (arrastrando la esquina inferior derecha) ----
+    container.querySelectorAll('.map-zone.editable .zresize').forEach(handleEl=>{
+      const key = handleEl.dataset.key;
+      const zoneEl = handleEl.closest('.map-zone');
+      let resizing = false, startW = 0, startH = 0, startX = 0, startY = 0;
+      handleEl.addEventListener('pointerdown', e=>{
+        e.preventDefault(); e.stopPropagation();
+        resizing = true;
+        startW = zoneEl.offsetWidth; startH = zoneEl.offsetHeight;
+        startX = e.clientX; startY = e.clientY;
+        handleEl.setPointerCapture(e.pointerId);
+      });
+      handleEl.addEventListener('pointermove', e=>{
+        if(!resizing) return;
+        const nw = Math.max(40, startW + (e.clientX - startX));
+        const nh = Math.max(34, startH + (e.clientY - startY));
+        zoneEl.style.width = nw + 'px';
+        zoneEl.style.height = nh + 'px';
+        const gv = zoneEl.querySelector('.zgrid-viewport');
+        const grid = zoneEl.querySelector('.zgrid');
+        if(gv){
+          const gh = Math.max(10, nh - MapView.HANDLE_H);
+          gv.style.height = gh + 'px';
+          if(grid){
+            const natW = parseFloat(grid.style.width)||nw;
+            const natH = parseFloat(grid.style.height)||gh;
+            grid.style.transform = `scale(${(nw/natW).toFixed(4)},${(gh/natH).toFixed(4)})`;
+          }
+        }
+      });
+      const finishResize = async ()=>{
+        if(!resizing) return;
+        resizing = false;
+        const w = Math.round(zoneEl.offsetWidth), h = Math.round(zoneEl.offsetHeight);
+        await MapView.saveTam(eventoId, evento, key, {w, h});
+        MapView.render(container, eventoId, myTicket, opts, pisoActivo);
+      };
+      handleEl.addEventListener('pointerup', finishResize);
+      handleEl.addEventListener('pointercancel', finishResize);
+    });
+
+    // ---- edición de puntos flexibles para las ubicaciones de diseño libre ----
+    if(editingPointsKey){
+      const zoneEl = container.querySelector(`.map-zone[data-key="${editingPointsKey}"]`);
+      if(zoneEl){
+        const forma = formaMap[editingPointsKey] || {tipo:'libre', puntos: this.defaultPuntosLibres()};
+        let puntos = (forma.puntos || this.defaultPuntosLibres()).map(p=>[...p]);
+        const renderPoints = ()=>{
+          zoneEl.querySelectorAll('.zpoint').forEach(p=>p.remove());
+          const w = zoneEl.offsetWidth, h = zoneEl.offsetHeight;
+          puntos.forEach((p, idx)=>{
+            const dot = document.createElement('div');
+            dot.className = 'zpoint';
+            dot.style.left = (p[0]/100*w) + 'px';
+            dot.style.top = (p[1]/100*h) + 'px';
+            dot.dataset.idx = idx;
+            zoneEl.appendChild(dot);
+            let dragging = false;
+            dot.addEventListener('pointerdown', e=>{
+              e.preventDefault(); e.stopPropagation();
+              dragging = true; dot.classList.add('dragging');
+              dot.setPointerCapture(e.pointerId);
+            });
+            dot.addEventListener('pointermove', e=>{
+              if(!dragging) return;
+              const rect = zoneEl.getBoundingClientRect();
+              let px = ((e.clientX - rect.left) / rect.width) * 100;
+              let py = ((e.clientY - rect.top) / rect.height) * 100;
+              px = Math.max(-20, Math.min(120, px));
+              py = Math.max(-20, Math.min(120, py));
+              puntos[idx] = [px, py];
+              dot.style.left = (px/100*w) + 'px';
+              dot.style.top = (py/100*h) + 'px';
+              zoneEl.style.clipPath = `path('${MapView.smoothPathFromPoints(puntos, w, h)}')`;
+            });
+            const finishPointDrag = async ()=>{
+              if(!dragging) return;
+              dragging = false; dot.classList.remove('dragging');
+              await MapView.saveForma(eventoId, evento, editingPointsKey, {tipo:'libre', puntos});
+            };
+            dot.addEventListener('pointerup', finishPointDrag);
+            dot.addEventListener('pointercancel', finishPointDrag);
+          });
+        };
+        renderPoints();
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'zpoints-toolbar';
+        toolbar.innerHTML = `<button id="zpAdd">➕ Punto</button><button id="zpDel">➖ Punto</button><button id="zpDone">✅ Listo</button>`;
+        toolbar.style.position = 'absolute';
+        toolbar.style.left = '0px';
+        toolbar.style.top = (zoneEl.offsetHeight + 8) + 'px';
+        zoneEl.appendChild(toolbar);
+        toolbar.querySelector('#zpAdd').addEventListener('click', async (e)=>{
+          e.stopPropagation();
+          // Inserta un punto nuevo en el punto medio entre los dos primeros para que el admin lo arrastre.
+          const a = puntos[0], b = puntos[1] || puntos[0];
+          puntos.splice(1, 0, [(a[0]+b[0])/2, (a[1]+b[1])/2]);
+          await MapView.saveForma(eventoId, evento, editingPointsKey, {tipo:'libre', puntos});
+          renderPoints();
+          zoneEl.style.clipPath = `path('${MapView.smoothPathFromPoints(puntos, zoneEl.offsetWidth, zoneEl.offsetHeight)}')`;
+        });
+        toolbar.querySelector('#zpDel').addEventListener('click', async (e)=>{
+          e.stopPropagation();
+          if(puntos.length<=3){ toast('Se necesitan al menos 3 puntos'); return; }
+          puntos.pop();
+          await MapView.saveForma(eventoId, evento, editingPointsKey, {tipo:'libre', puntos});
+          renderPoints();
+          zoneEl.style.clipPath = `path('${MapView.smoothPathFromPoints(puntos, zoneEl.offsetWidth, zoneEl.offsetHeight)}')`;
+        });
+        toolbar.querySelector('#zpDone').addEventListener('click', (e)=>{
+          e.stopPropagation();
+          if(MapView._editingPoints) delete MapView._editingPoints[eventoId];
+          MapView.render(container, eventoId, myTicket, opts, pisoActivo);
+        });
+      }
+    }
 
     // ---- imagen de fondo: subir, quitar y ajustar opacidad ----
     const fondoFile = document.getElementById('mapFondoFile');
@@ -2264,16 +2714,16 @@ const MapView = {
         if(!file.type.startsWith('image/')){ toast('Selecciona un archivo de imagen'); return; }
         try{
           const nuevoFondo = await MapView.fileToFondo(file);
-          await MapView.saveFondo(eventoId, evento, nuevoFondo);
-          MapView.render(container, eventoId, myTicket, opts);
+          await MapView.saveFondo(eventoId, evento, nuevoFondo, pisoActivo);
+          MapView.render(container, eventoId, myTicket, opts, pisoActivo);
         }catch(e){ console.error(e); toast('No se pudo cargar la imagen', true); }
       });
     }
     const fondoQuitar = document.getElementById('mapFondoQuitar');
     if(fondoQuitar) fondoQuitar.addEventListener('click', async ()=>{
       if(!confirm('¿Quitar la imagen del plano?')) return;
-      await MapView.saveFondo(eventoId, evento, null);
-      MapView.render(container, eventoId, myTicket, opts);
+      await MapView.saveFondo(eventoId, evento, null, pisoActivo);
+      MapView.render(container, eventoId, myTicket, opts, pisoActivo);
     });
     const fondoOpacidad = document.getElementById('mapFondoOpacidad');
     if(fondoOpacidad){
@@ -2283,19 +2733,20 @@ const MapView = {
       });
       fondoOpacidad.addEventListener('change', async ()=>{
         const nuevoFondo = {...fondo, opacidad: fondoOpacidad.value/100};
-        await MapView.saveFondo(eventoId, evento, nuevoFondo);
+        await MapView.saveFondo(eventoId, evento, nuevoFondo, pisoActivo);
       });
     }
 
     // ---- objetos decorativos: agregar desde la barra de herramientas ----
-    let currentObjetos = objetos.map(o=>({...o}));
     const objToolbar = document.getElementById('mapObjToolbar');
     if(objToolbar){
       objToolbar.querySelectorAll('button[data-tipo]').forEach(btn=>{
         btn.addEventListener('click', async ()=>{
-          currentObjetos.push(MapView.newObjeto(btn.dataset.tipo));
+          const nuevo = MapView.newObjeto(btn.dataset.tipo);
+          nuevo.piso = pisoActivo;
+          currentObjetos.push(nuevo);
           await MapView.saveObjetos(eventoId, evento, currentObjetos);
-          MapView.render(container, eventoId, myTicket, opts);
+          MapView.render(container, eventoId, myTicket, opts, pisoActivo);
         });
       });
     }
@@ -2321,7 +2772,38 @@ const MapView = {
         o.label = nombre.trim() || 'Mesa';
         o.catKey = catKey.trim() || null;
         await MapView.saveObjetos(eventoId, evento, currentObjetos);
-        MapView.render(container, eventoId, myTicket, opts);
+        MapView.render(container, eventoId, myTicket, opts, pisoActivo);
+      });
+    });
+
+    // ---- mover un objeto decorativo a otro piso (🏢) ----
+    container.querySelectorAll('.map-obj.editable .obj-floor').forEach(fBtn=>{
+      fBtn.addEventListener('pointerdown', e=> e.stopPropagation());
+      fBtn.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        MapView.closeFloatingMenus();
+        const objEl = fBtn.closest('.map-obj');
+        const objId = objEl.dataset.objId;
+        const o = currentObjetos.find(oo=>oo.id===objId);
+        if(!o) return;
+        const menu = document.createElement('div');
+        menu.className = 'zmenu';
+        menu.style.left = (e.clientX + 6) + 'px';
+        menu.style.top = (e.clientY + 6) + 'px';
+        menu.style.position = 'fixed';
+        menu.innerHTML = pisos.map(p=>`<button data-piso="${p.id}" class="${(o.piso||pisos[0].id)===p.id?'active':''}">${escapeHtml(p.nombre)}</button>`).join('');
+        document.body.appendChild(menu);
+        const closeMenu = ()=>{ menu.remove(); document.removeEventListener('pointerdown', outsideClick, true); };
+        const outsideClick = (ev)=>{ if(!menu.contains(ev.target)) closeMenu(); };
+        setTimeout(()=> document.addEventListener('pointerdown', outsideClick, true), 0);
+        menu.querySelectorAll('button[data-piso]').forEach(btn=>{
+          btn.addEventListener('click', async ()=>{
+            o.piso = btn.dataset.piso;
+            await MapView.saveObjetos(eventoId, evento, currentObjetos);
+            closeMenu();
+            MapView.render(container, eventoId, myTicket, opts, pisoActivo);
+          });
+        });
       });
     });
 
@@ -2331,7 +2813,7 @@ const MapView = {
       let offXo = 0, offYo = 0, resizing = false, startW = 0, startH = 0, startX = 0, startY = 0;
 
       objEl.addEventListener('pointerdown', e=>{
-        if(e.target.closest('.obj-del') || e.target.closest('.obj-resize') || e.target.closest('.obj-cfg')) return;
+        if(e.target.closest('.obj-del') || e.target.closest('.obj-resize') || e.target.closest('.obj-cfg') || e.target.closest('.obj-floor')) return;
         e.preventDefault();
         dragEl = objEl; dragKey = null;
         const canvasRect = canvasEl.getBoundingClientRect();
@@ -2367,7 +2849,7 @@ const MapView = {
         e.stopPropagation();
         currentObjetos = currentObjetos.filter(oo=>oo.id!==objId);
         await MapView.saveObjetos(eventoId, evento, currentObjetos);
-        MapView.render(container, eventoId, myTicket, opts);
+        MapView.render(container, eventoId, myTicket, opts, pisoActivo);
       });
 
       const resizeHandle = objEl.querySelector('.obj-resize');
@@ -2435,9 +2917,15 @@ const MapView = {
     });
   },
 
-  // Guarda (o quita, si fondo es null) la imagen de fondo del plano del evento.
-  async saveFondo(eventoId, evento, fondo){
-    const nuevoMapa = {...(evento.mapa||{}), fondo};
+  // Guarda (o quita, si fondo es null) la imagen de fondo del plano de un piso del evento.
+  async saveFondo(eventoId, evento, fondo, pisoId){
+    pisoId = pisoId || this.pisosOf(evento && evento.mapa)[0].id;
+    const pisos = this.clonePisos(evento);
+    let p = pisos.find(pp=>pp.id===pisoId);
+    if(!p){ p = {id:pisoId, nombre:'Piso', fondo:null, layout:{}}; pisos.push(p); }
+    p.fondo = fondo;
+    const nuevoMapa = {...(evento.mapa||{}), pisos};
+    delete nuevoMapa.fondo; delete nuevoMapa.layout;
     const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
     if(error){ toast('No se pudo guardar la imagen del plano', true); return; }
     evento.mapa = nuevoMapa;
@@ -2464,8 +2952,15 @@ const MapView = {
     toast('Nombre actualizado');
   },
 
-  async saveLayout(eventoId, evento, layout){
-    const nuevoMapa = {...(evento.mapa || {}), layout};
+  // Guarda la posición de las ubicaciones (layout) de un piso específico del evento.
+  async saveLayout(eventoId, evento, layout, pisoId){
+    pisoId = pisoId || this.pisosOf(evento && evento.mapa)[0].id;
+    const pisos = this.clonePisos(evento);
+    let p = pisos.find(pp=>pp.id===pisoId);
+    if(!p){ p = {id:pisoId, nombre:'Piso', fondo:null, layout:{}}; pisos.push(p); }
+    p.layout = layout;
+    const nuevoMapa = {...(evento.mapa||{}), pisos};
+    delete nuevoMapa.fondo; delete nuevoMapa.layout;
     const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
     if(error){ toast('No se pudo guardar la posición', true); return; }
     evento.mapa = nuevoMapa;
