@@ -510,6 +510,41 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
   cursor:nwse-resize; display:none; z-index:6; box-shadow:0 0 5px rgba(0,240,255,.7);
 }
 .map-obj.editable:hover .obj-del, .map-obj.editable:hover .obj-resize{display:block;}
+
+/* ---------- imagen de fondo (plano arquitectónico subido por el admin) ---------- */
+.map-fondo-img{position:absolute; left:0; top:0; z-index:0; pointer-events:none; border-radius:8px; user-select:none;}
+.map-fondo-toolbar{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;
+  max-width:640px; margin:0 auto 10px; padding:8px 10px; border-radius:10px;
+  background:var(--panel); border:1px solid var(--line-soft);
+}
+.map-fondo-toolbar label.mf-upload{
+  display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; color:var(--text-dim);
+  border:1px dashed var(--line-soft); padding:6px 10px; border-radius:8px;
+}
+.map-fondo-toolbar label.mf-upload:hover{color:var(--cyan); border-color:var(--cyan);}
+.map-fondo-toolbar input[type=file]{display:none;}
+.map-fondo-toolbar .mf-opacity{display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim);}
+.map-fondo-toolbar .mf-opacity input{width:90px;}
+
+/* ---------- objeto "mesa" (mesa redonda vinculable a una categoría vendible) ---------- */
+.map-obj.mesa .obj-mesa{
+  width:100%; height:100%; border-radius:50%; position:relative;
+  background:radial-gradient(circle at 35% 30%, #fff7e0, #d8c48a 65%, #a9924f 100%);
+  border:2px solid #7a6a35; box-shadow:0 4px 8px -2px rgba(0,0,0,.6), inset 0 2px 0 rgba(255,255,255,.5);
+  display:flex; align-items:center; justify-content:center; text-align:center; overflow:hidden;
+}
+.map-obj.mesa.libre .obj-mesa{border-color:var(--cyan); box-shadow:0 0 10px rgba(0,240,255,.5), inset 0 2px 0 rgba(255,255,255,.5);}
+.map-obj.mesa.llena .obj-mesa{border-color:var(--bad); background:radial-gradient(circle at 35% 30%, #ffdada, #d88a8a 65%, #a94f4f 100%);}
+.map-obj.mesa.tuya .obj-mesa{border-color:var(--lime); box-shadow:0 0 12px var(--lime);}
+.map-obj.mesa[data-clicable="1"] .obj-mesa{cursor:pointer;}
+.map-obj .obj-mesa-txt{font-size:8.5px; line-height:1.15; color:#241c08; font-weight:700; padding:2px; font-family:'Rajdhani',sans-serif;}
+.map-obj .obj-cfg{
+  position:absolute; top:-8px; left:-8px; width:15px; height:15px; border-radius:50%; background:var(--violet);
+  color:#fff; font-size:9px; line-height:15px; text-align:center; cursor:pointer; display:none;
+  box-shadow:0 0 6px rgba(157,77,255,.7); z-index:6;
+}
+.map-obj.editable:hover .obj-cfg{display:block;}
 .seat{
   width:16px; height:16px; border-radius:4px; background:#211539; border:1px solid var(--line); cursor:default; transition:.15s;
 }
@@ -1885,6 +1920,7 @@ const MapView = {
     const layout = {...(mapa.layout || {})};
     const nombresMap = mapa.nombres || {};
     const objetos = (mapa.objetos || []).map(o=>({...o}));
+    const fondo = mapa.fondo || null; // {src, w, h, opacidad} — imagen del plano subida por el admin
 
     const palcos = {}; let vipTaken=0, vipTotal=0, generalTaken=0, generalTotal=0;
     const vipSeats = [];
@@ -1977,6 +2013,21 @@ const MapView = {
       canvasH = Math.max(canvasH, o.y + o.h + 24);
       canvasWfinal = Math.max(canvasWfinal, o.x + o.w + 24);
     });
+    // Si hay una imagen de plano cargada, el canvas debe ser al menos tan grande
+    // como ella para que quede completa como fondo (el contenedor tiene scroll).
+    if(fondo && fondo.w && fondo.h){
+      canvasWfinal = Math.max(canvasWfinal, fondo.w);
+      canvasH = Math.max(canvasH, fondo.h);
+    }
+
+    // ---- mesas: calcular disponibilidad de la categoría vendible vinculada ----
+    const mesaEstado = {};
+    objetos.filter(o=>o.tipo==='mesa' && o.catKey).forEach(o=>{
+      const deLaCategoria = asientos.filter(a=>a.zona===o.catKey);
+      const libres = deLaCategoria.filter(a=>!a.ocupado);
+      const miAsiento = myNum ? deLaCategoria.find(a=>a.numero===myNum) : null;
+      mesaEstado[o.id] = {total:deLaCategoria.length, libres:libres.length, siguienteLibre: libres[0]||null, esTuya: !!miAsiento};
+    });
 
     // ---- render HTML ----
     const seatEl = (s, extraTitle)=>{
@@ -2006,14 +2057,33 @@ const MapView = {
       if(o.tipo==='muro') return `<div class="obj-body"><div class="obj-muro"></div></div>`;
       if(o.tipo==='arbol') return `<div class="obj-body obj-arbol"><div class="obj-copa"></div><div class="obj-tronco"></div></div>`;
       if(o.tipo==='casa') return `<div class="obj-body obj-casa"><div class="obj-techo"></div><div class="obj-pared"></div></div>`;
+      if(o.tipo==='mesa'){
+        const est = mesaEstado[o.id];
+        let txt = escapeHtml(o.label || 'Mesa');
+        if(est) txt += `<br>${est.libres}/${est.total}`;
+        else if(o.catKey) txt += `<br>·`;
+        return `<div class="obj-body"><div class="obj-mesa"><span class="obj-mesa-txt">${txt}</span></div></div>`;
+      }
       return `<div class="obj-body"><div class="obj-grupo"><span></span><span></span><span></span><span></span></div></div>`;
     };
+    // Una mesa es clicable en modo compra si está vinculada a una categoría
+    // vendible y le queda al menos un puesto libre.
+    const mesaClicable = (o)=> opts.buyable && o.tipo==='mesa' && o.catKey && mesaEstado[o.id] && mesaEstado[o.id].libres>0;
+    const mesaEstadoClase = (o)=>{
+      if(o.tipo!=='mesa' || !o.catKey) return '';
+      const est = mesaEstado[o.id];
+      if(!est) return '';
+      if(est.esTuya) return 'tuya';
+      return est.libres>0 ? 'libre' : 'llena';
+    };
     const objetosHtml = objetos.map(o=>`
-      <div class="map-obj ${o.tipo} ${editable?'editable':''}" data-obj-id="${o.id}" style="left:${o.x}px; top:${o.y}px; width:${o.w}px; height:${o.h}px;">
+      <div class="map-obj ${o.tipo} ${editable?'editable':''} ${mesaEstadoClase(o)}" data-obj-id="${o.id}" data-clicable="${mesaClicable(o)?'1':'0'}" style="left:${o.x}px; top:${o.y}px; width:${o.w}px; height:${o.h}px;">
         ${objBodyHtml(o)}
-        ${o.label ? `<div class="obj-label">${escapeHtml(o.label)}</div>` : ''}
+        ${o.label && o.tipo!=='mesa' ? `<div class="obj-label">${escapeHtml(o.label)}</div>` : ''}
+        ${editable && o.tipo==='mesa' ? `<div class="obj-cfg" title="Configurar mesa">⚙</div>` : ''}
         ${editable ? `<div class="obj-del" title="Eliminar">✕</div><div class="obj-resize" title="Arrastra para redimensionar"></div>` : ''}
       </div>`).join('');
+    const fondoHtml = fondo && fondo.src ? `<img class="map-fondo-img" src="${fondo.src}" style="width:${fondo.w}px; height:${fondo.h}px; opacity:${fondo.opacidad!=null?fondo.opacidad:1};">` : '';
 
     container.innerHTML = `
       <div class="map-canvas-toolbar">
@@ -2021,15 +2091,22 @@ const MapView = {
         ${editable ? `<div style="display:flex; gap:8px;"><button class="btn btn-sm" id="mapResetBtn">Restablecer orden</button></div>` : ''}
       </div>
       ${editable ? `
+      <div class="map-fondo-toolbar" id="mapFondoToolbar">
+        <label class="mf-upload">🖼️ ${fondo ? 'Cambiar imagen del plano' : 'Subir imagen del plano'}<input type="file" id="mapFondoFile" accept="image/*"></label>
+        ${fondo ? `<button class="btn btn-sm" type="button" id="mapFondoQuitar">✕ Quitar imagen</button>
+        <span class="mf-opacity">Opacidad <input type="range" id="mapFondoOpacidad" min="20" max="100" value="${Math.round((fondo.opacidad!=null?fondo.opacidad:1)*100)}"></span>` : ''}
+      </div>
       <div class="map-objects-toolbar" id="mapObjToolbar">
         <p class="hint2">Objetos del plano (arrástralos, redimensiona por la esquina, ✕ para borrar):</p>
         <button class="btn btn-sm" type="button" data-tipo="muro">➕ Muro</button>
         <button class="btn btn-sm" type="button" data-tipo="arbol">➕ Árbol</button>
         <button class="btn btn-sm" type="button" data-tipo="casa">➕ Casa</button>
+        <button class="btn btn-sm" type="button" data-tipo="mesa">➕ Mesa</button>
         <button class="btn btn-sm" type="button" data-tipo="grupo">➕ Grupo de objetos</button>
       </div>` : ''}
       <div class="map-canvas-wrap">
         <div class="map-canvas" id="mapCanvasEl" style="width:${canvasWfinal}px; height:${canvasH}px;">
+          ${fondoHtml}
           <div class="map-stage ${editable?'editable-drag':''}" style="left:${stagePos.x}px; top:${stagePos.y}px; width:${stageW}px; height:${stageH}px; font-size:13px;">ESCENARIO</div>
           ${zonesHtml}
           ${objetosHtml}
@@ -2055,6 +2132,23 @@ const MapView = {
         el.addEventListener('click', ()=>{
           const asientoClic = asientos.find(a=>a.id===el.dataset.id);
           if(asientoClic && typeof opts.onSeatClick==='function') opts.onSeatClick(asientoClic);
+        });
+      });
+      // ---- modo compra: tocar una mesa vinculada y disponible la selecciona ----
+      container.querySelectorAll('.map-obj.mesa[data-clicable="1"]').forEach(el=>{
+        el.addEventListener('click', ()=>{
+          const o = objetos.find(oo=>oo.id===el.dataset.objId);
+          const est = o && mesaEstado[o.id];
+          if(est && est.siguienteLibre && typeof opts.onSeatClick==='function') opts.onSeatClick(est.siguienteLibre);
+        });
+        el.querySelectorAll('.obj-mesa').forEach(body=>{
+          body.addEventListener('mouseenter', e=>{
+            const o = objetos.find(oo=>oo.id===el.dataset.objId);
+            const cat = CategoriaServicio.find(evento, o.catKey);
+            this.showTip(e, `${o.label||'Mesa'} · ${cat?cat.nombre:o.catKey}`);
+          });
+          body.addEventListener('mousemove', e=> this.moveTip(e));
+          body.addEventListener('mouseleave', ()=> this.hideTip());
         });
       });
     }
@@ -2161,6 +2255,38 @@ const MapView = {
       });
     });
 
+    // ---- imagen de fondo: subir, quitar y ajustar opacidad ----
+    const fondoFile = document.getElementById('mapFondoFile');
+    if(fondoFile){
+      fondoFile.addEventListener('change', async ()=>{
+        const file = fondoFile.files[0];
+        if(!file) return;
+        if(!file.type.startsWith('image/')){ toast('Selecciona un archivo de imagen'); return; }
+        try{
+          const nuevoFondo = await MapView.fileToFondo(file);
+          await MapView.saveFondo(eventoId, evento, nuevoFondo);
+          MapView.render(container, eventoId, myTicket, opts);
+        }catch(e){ console.error(e); toast('No se pudo cargar la imagen', true); }
+      });
+    }
+    const fondoQuitar = document.getElementById('mapFondoQuitar');
+    if(fondoQuitar) fondoQuitar.addEventListener('click', async ()=>{
+      if(!confirm('¿Quitar la imagen del plano?')) return;
+      await MapView.saveFondo(eventoId, evento, null);
+      MapView.render(container, eventoId, myTicket, opts);
+    });
+    const fondoOpacidad = document.getElementById('mapFondoOpacidad');
+    if(fondoOpacidad){
+      const imgEl = container.querySelector('.map-fondo-img');
+      fondoOpacidad.addEventListener('input', ()=>{
+        if(imgEl) imgEl.style.opacity = (fondoOpacidad.value/100);
+      });
+      fondoOpacidad.addEventListener('change', async ()=>{
+        const nuevoFondo = {...fondo, opacidad: fondoOpacidad.value/100};
+        await MapView.saveFondo(eventoId, evento, nuevoFondo);
+      });
+    }
+
     // ---- objetos decorativos: agregar desde la barra de herramientas ----
     let currentObjetos = objetos.map(o=>({...o}));
     const objToolbar = document.getElementById('mapObjToolbar');
@@ -2174,13 +2300,38 @@ const MapView = {
       });
     }
 
+    // ---- mesas: configurar nombre y categoría vendible vinculada ----
+    container.querySelectorAll('.map-obj.mesa.editable .obj-cfg').forEach(cfgBtn=>{
+      cfgBtn.addEventListener('pointerdown', e=> e.stopPropagation());
+      cfgBtn.addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        const objEl = cfgBtn.closest('.map-obj');
+        const objId = objEl.dataset.objId;
+        const o = currentObjetos.find(oo=>oo.id===objId);
+        if(!o) return;
+        const nombre = prompt('Nombre de la mesa (ej. "Mesa 1"):', o.label||'Mesa');
+        if(nombre===null) return;
+        const cats = CategoriaServicio.list(evento).filter(c=>c.key!=='palco');
+        const listado = cats.map(c=>`${c.key} = ${c.nombre}`).join('\n');
+        const catKey = prompt(
+          `Clave de la categoría vendible que ocupa esta mesa (deja vacío para que sea solo decorativa):\n${listado}`,
+          o.catKey || ''
+        );
+        if(catKey===null) return;
+        o.label = nombre.trim() || 'Mesa';
+        o.catKey = catKey.trim() || null;
+        await MapView.saveObjetos(eventoId, evento, currentObjetos);
+        MapView.render(container, eventoId, myTicket, opts);
+      });
+    });
+
     // ---- objetos decorativos: arrastrar, redimensionar y borrar ----
     container.querySelectorAll('.map-obj.editable').forEach(objEl=>{
       const objId = objEl.dataset.objId;
       let offXo = 0, offYo = 0, resizing = false, startW = 0, startH = 0, startX = 0, startY = 0;
 
       objEl.addEventListener('pointerdown', e=>{
-        if(e.target.closest('.obj-del') || e.target.closest('.obj-resize')) return;
+        if(e.target.closest('.obj-del') || e.target.closest('.obj-resize') || e.target.closest('.obj-cfg')) return;
         e.preventDefault();
         dragEl = objEl; dragKey = null;
         const canvasRect = canvasEl.getBoundingClientRect();
@@ -2250,9 +2401,47 @@ const MapView = {
   // Crea un objeto decorativo nuevo (muro, árbol, casa o grupo de objetos)
   // con un tamaño por defecto razonable para el plano 3D.
   newObjeto(tipo){
-    const defaults = {muro:{w:90,h:14}, arbol:{w:28,h:34}, casa:{w:48,h:44}, grupo:{w:76,h:56}};
+    const defaults = {muro:{w:90,h:14}, arbol:{w:28,h:34}, casa:{w:48,h:44}, grupo:{w:76,h:56}, mesa:{w:54,h:54}};
     const d = defaults[tipo] || {w:40,h:40};
-    return {id:'obj'+Math.random().toString(36).slice(2,8), tipo, x:14, y:14, w:d.w, h:d.h};
+    const obj = {id:'obj'+Math.random().toString(36).slice(2,8), tipo, x:14, y:14, w:d.w, h:d.h};
+    if(tipo==='mesa'){ obj.label = 'Mesa'; obj.catKey = null; }
+    return obj;
+  },
+
+  // Redimensiona/comprime la imagen del plano subida por el admin a un ancho
+  // máximo razonable y calcula sus dimensiones finales para usarlas como
+  // tamaño del canvas del mapa (misma técnica que IconSettings._fileToDataUrl).
+  fileToFondo(file, maxW){
+    maxW = maxW || 900;
+    return new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onload = (ev)=>{
+        const img = new Image();
+        img.onload = ()=>{
+          const scale = Math.min(1, maxW / img.width);
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve({src: canvas.toDataURL('image/png'), w, h, opacidad: 1});
+        };
+        img.onerror = reject;
+        img.src = ev.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  },
+
+  // Guarda (o quita, si fondo es null) la imagen de fondo del plano del evento.
+  async saveFondo(eventoId, evento, fondo){
+    const nuevoMapa = {...(evento.mapa||{}), fondo};
+    const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventoId);
+    if(error){ toast('No se pudo guardar la imagen del plano', true); return; }
+    evento.mapa = nuevoMapa;
+    if(typeof AdminApp!=='undefined' && AdminApp.evento && AdminApp.evento.id===eventoId) AdminApp.evento.mapa = nuevoMapa;
   },
 
   async saveObjetos(eventoId, evento, objetos){
