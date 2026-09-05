@@ -10,6 +10,9 @@
 <link rel="preconnect" href="https://ukmmrbjmeumjkxdblmgc.supabase.co">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<!-- Visor 3D de Spline (versión "web component" para HTML plano; equivalente
+     al paquete @splinetool/react-spline pero sin necesitar React/Next.js) -->
+<script type="module" src="https://unpkg.com/@splinetool/viewer@1.9.35/build/spline-viewer.js"></script>
 <!-- qrcodejs y html5-qrcode ya NO se cargan aquí: se cargan bajo demanda (ver loadScriptOnce) solo cuando
      el usuario realmente entra a la pantalla que los necesita (ver tickets, escanear QR).
      Esto evita descargar y parsear JS que la mayoría de sesiones nunca usa. -->
@@ -392,6 +395,14 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
   from{ opacity:0; transform:translateY(38px) rotate(var(--fan-rot,0deg)) scale(.86); }
   to{ opacity:1; transform:translateY(0) rotate(0deg) scale(1); }
 }
+/* ---------- fondo 3D (Spline) detrás de "Mis tickets" ---------- */
+.tickets-scene-wrap{ position:relative; }
+.tickets-spline-bg{
+  position:absolute; inset:0; width:100%; height:100%;
+  z-index:0; pointer-events:none; border-radius:20px; overflow:hidden;
+}
+#u-tickets{ position:relative; z-index:1; }
+
 .ticket{
   --stub-w:118px;
   position:relative; margin:0 0 30px; transform-origin:top center;
@@ -409,7 +420,10 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .ticket:nth-child(n+7){ animation-delay:.48s; }
 .ticket-shell{
   position:relative; display:flex; align-items:stretch; min-height:180px; border-radius:20px; overflow:hidden;
-  border:1px solid var(--line-soft); box-shadow:var(--shadow); transition:.25s; background:#0d0818;
+  border:1px solid var(--line-soft); box-shadow:var(--shadow); transition:.25s;
+  /* Translúcido tipo "vidrio" para que la escena 3D de Spline se vea a través
+     de la tarjeta (antes era un fondo sólido #0d0818). */
+  background:rgba(13,8,24,.28); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);
 }
 /* muescas circulares "troqueladas" donde se separa el stub del cuerpo del ticket */
 .ticket-shell::before,.ticket-shell::after{
@@ -421,7 +435,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .ticket:hover .ticket-shell{box-shadow:var(--shadow), var(--glow-violet); transform:translateY(-3px);}
 /* ---- stub izquierdo: holograma animado + QR ---- */
 .t-stub{
-  width:var(--stub-w); min-width:var(--stub-w); position:relative; flex-shrink:0;
+  width:var(--stub-w); min-width:var(--stub-w); position:relative; z-index:1; flex-shrink:0;
   display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:14px 8px;
   background:conic-gradient(from 120deg, #ff2ee0, #00f0ff, #9d4dff, #c6ff3a, #ff2ee0);
   background-size:200% 200%; animation:holo 5s linear infinite;
@@ -434,8 +448,9 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .t-stub-qr{
   position:relative; z-index:1; background:#fff; padding:6px; border-radius:10px;
   width:min(78px, calc(var(--stub-w) - 24px)); height:min(78px, calc(var(--stub-w) - 24px));
-  box-shadow:0 0 14px rgba(0,0,0,.35); flex-shrink:0;
+  box-shadow:0 0 14px rgba(0,0,0,.35); flex-shrink:0; cursor:zoom-in; transition:transform .15s ease;
 }
+.t-stub-qr:hover{ transform:scale(1.06); }
 .t-stub-qr img,.t-stub-qr canvas{width:100%; height:100%;}
 .t-stub-brand{
   position:relative; z-index:1; writing-mode:vertical-rl; transform:rotate(180deg);
@@ -447,10 +462,12 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .t-divider{ position:relative; width:0; border-left:2px dashed rgba(255,255,255,.32); flex-shrink:0; }
 /* ---- cuerpo principal del ticket ---- */
 .t-body{
-  flex:1; min-width:0; position:relative; padding:16px 18px 14px;
-  background:linear-gradient(160deg, var(--panel), #100a20);
+  flex:1; min-width:0; position:relative; z-index:1; padding:16px 18px 14px;
+  background:linear-gradient(160deg, rgba(24,16,42,.62), rgba(16,10,32,.7));
+  backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px);
   display:flex; flex-direction:column; gap:5px;
 }
+.t-body .evt-name{font-size:12.5px; color:var(--text-dim); font-family:'Rajdhani',sans-serif; font-weight:600; letter-spacing:.02em; margin-top:2px;}
 .t-body .cat{font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--lime); font-family:'Rajdhani',sans-serif; font-weight:700;}
 .t-body .title{font-family:'Orbitron',sans-serif; font-size:18px; line-height:1.2; padding-right:110px;}
 .t-body .meta{font-size:12px; color:var(--text-dim); line-height:1.65; margin-top:2px;}
@@ -885,7 +902,10 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="u-mapa" onclick="UsuarioApp.tab('u-mapa')">Mapa del evento</div>
         <div class="pill-tab" data-tab="u-transferir" onclick="UsuarioApp.tab('u-transferir')">Transferir tickets</div>
       </div>
-      <div id="u-tickets" class="tab-pane"></div>
+      <div class="tickets-scene-wrap">
+        <spline-viewer class="tickets-spline-bg" url="https://prod.spline.design/nsWByDjE6O9J-PMd/scene.splinecode"></spline-viewer>
+        <div id="u-tickets" class="tab-pane"></div>
+      </div>
       <div id="u-comprar" class="tab-pane hide"></div>
       <div id="u-chat" class="tab-pane hide">
         <div class="grid-2">
@@ -2863,21 +2883,34 @@ const UsuarioApp = {
     this.tab('u-tickets');
     this.renderTickets();
   },
-  renderTickets(){
+  async renderTickets(){
     const box = document.getElementById('u-tickets');
     if(!this.tickets.length){ box.innerHTML = `<div class="card"><p class="hint">No tienes tickets asignados todavía.</p></div>`; return; }
+    // Los tickets de un mismo cliente pueden pertenecer a distintos eventos
+    // (login por correo/cédula no filtra por evento), así que se consulta el
+    // nombre de cada evento involucrado para mostrarlo en la tarjeta.
+    const eventoIds = [...new Set(this.tickets.map(t=>t.evento_id).filter(Boolean))];
+    let nombresPorEvento = {};
+    if(eventoIds.length){
+      try{
+        const {data} = await sb.from('eventos').select('id,nombre').in('id', eventoIds);
+        (data||[]).forEach(e=>{ nombresPorEvento[e.id] = e.nombre; });
+      }catch(e){ /* si falla, simplemente no se muestra el nombre del evento */ }
+    }
     box.innerHTML = this.tickets.map(t=>{
       const scanned = t.escaneado;
+      const evNombre = nombresPorEvento[t.evento_id] || '';
       return `
       <div class="ticket">
         <div class="ticket-shell">
           <div class="t-stub">
-            <div class="t-stub-qr" id="qr-${t.id}"></div>
+            <div class="t-stub-qr" id="qr-${t.id}" onclick="UsuarioApp.ampliarQR('${t.id}')" title="Toca para ampliar el QR"></div>
             <div class="t-stub-brand">Cashless · Colombia</div>
           </div>
           <div class="t-divider"></div>
           <div class="t-body">
             <span class="scan-flag ${scanned?'':'pending'}">${scanned?`✓ Escaneado ${fmtTime(t.escaneado_hora)} · ${escapeHtml(t.escaneado_por||'')}`:'Pendiente de ingreso'}</span>
+            ${evNombre ? `<div class="evt-name">${escapeHtml(evNombre)}</div>` : ''}
             <span class="cat">${escapeHtml(t.categoria)}</span>
             <div class="title">${escapeHtml(t.nombre_cliente||'Sin nombre')}</div>
             <div class="meta">Ubicación: ${escapeHtml(t.ubicacion_detalle||t.ubicacion_tipo||'-')}<br>Vendido por: ${escapeHtml(t.vt_usuario||'Admin')}<br>Comprado: ${fmtTime(t.created_at)}</div>
@@ -2891,6 +2924,23 @@ const UsuarioApp = {
       const el = document.getElementById('qr-'+t.id);
       if(el) renderQR(el, JSON.stringify({codigo:t.codigo, evento:t.evento_id}));
     });
+  },
+  // Abre el QR de un ticket ampliado en un modal, para facilitar el escaneo
+  // (por ejemplo cuando la pantalla del celular tiene brillo bajo o el QR
+  // pequeño de la tarjeta cuesta enfocarlo con el lector).
+  async ampliarQR(id){
+    const t = this.tickets.find(x=>x.id===id);
+    if(!t) return;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="qrZoomModal" onclick="if(event.target===this) this.remove()">
+        <div class="modal" style="max-width:320px; text-align:center;">
+          <div class="section-title"><h2 style="font-size:17px;">Código QR de tu entrada</h2></div>
+          <div id="qrZoomBox" style="width:100%; max-width:260px; margin:0 auto; background:#fff; padding:14px; border-radius:14px;"></div>
+          <p class="hint mono" style="margin-top:12px; font-size:13px;">${escapeHtml(t.codigo)}</p>
+          <button class="btn btn-block" style="margin-top:10px;" onclick="document.getElementById('qrZoomModal').remove()">Cerrar</button>
+        </div>
+      </div>`);
+    await renderQR(document.getElementById('qrZoomBox'), JSON.stringify({codigo:t.codigo, evento:t.evento_id}));
   },
   // Comparte los datos del ticket usando el share sheet nativo del dispositivo
   // (WhatsApp, Mensajes, etc.) y si el navegador no lo soporta, abre WhatsApp Web.
@@ -2974,7 +3024,7 @@ const UsuarioApp = {
       <div class="grid-2">
         <div class="card">
           <div class="section-title"><h2 style="font-size:19px;">Transferir un ticket mío</h2></div>
-          <p class="hint">Genera un código de 4 dígitos y compártelo con la persona a quien le vas a pasar el ticket. Al confirmarse, tu QR queda inválido y se genera uno nuevo para el nuevo dueño.</p>
+          <p class="hint">Genera un código de 4 dígitos y compártelo con la persona a quien le vas a pasar el ticket. Por seguridad, mientras el código esté activo (5 minutos) el ticket queda bloqueado y no podrá usarse para ingresar al evento. Al confirmarse la transferencia, tu QR queda inválido y se genera uno nuevo para el nuevo dueño.</p>
           ${this.identity ? '' : '<p class="hint">Ingresa primero con tu correo o cédula en "Mis tickets" para ver tus tickets disponibles.</p>'}
           ${misTickets.length ? misTickets.map(t=>this.transferCardHtml(t)).join('') : (this.identity ? '<p class="hint">No tienes tickets activos para transferir.</p>' : '')}
         </div>
@@ -2993,18 +3043,24 @@ const UsuarioApp = {
       <div class="stat" style="text-align:left; margin-bottom:10px;">
         <b>${escapeHtml(t.categoria)} · ${escapeHtml(t.ubicacion_detalle||t.ubicacion_tipo||'')}</b>
         ${t.escaneado ? `<p class="hint">Ya fue usada en el ingreso — no se puede transferir.</p>` :
-          activo ? `<p class="hint">Código activo: <b class="mono" style="font-size:22px; letter-spacing:4px;">${escapeHtml(t.transfer_code)}</b><br>Vence: ${fmtTime(t.transfer_code_expires)}</p><button class="btn btn-sm btn-danger" onclick="UsuarioApp.cancelarTransferencia('${t.id}')">Cancelar código</button>` :
+          activo ? `<p class="hint">🔒 Ticket bloqueado mientras dure la transferencia.<br>Código activo: <b class="mono" style="font-size:22px; letter-spacing:4px;">${escapeHtml(t.transfer_code)}</b><br>Vence: ${fmtTime(t.transfer_code_expires)}</p><button class="btn btn-sm btn-danger" onclick="UsuarioApp.cancelarTransferencia('${t.id}')">Cancelar código y desbloquear</button>` :
           `<button class="btn btn-sm" onclick="UsuarioApp.generarCodigoTransferencia('${t.id}')">Generar código de transferencia</button>`}
       </div>`;
   },
+  // Genera el código de 4 dígitos y, por seguridad, bloquea el ticket durante
+  // los 5 minutos de validez del código (ver chequeo en QRApp.handleCode):
+  // mientras el código esté activo, el ticket no puede escanearse para
+  // ingresar al evento, evitando que se use mientras la transferencia está
+  // en curso. Si el nuevo dueño no completa la transferencia en ese tiempo,
+  // el código expira solo y el ticket vuelve a estar disponible.
   async generarCodigoTransferencia(id){
     const codigo = String(Math.floor(1000 + Math.random()*9000));
-    const expires = new Date(Date.now() + 30*60*1000).toISOString();
+    const expires = new Date(Date.now() + 5*60*1000).toISOString();
     const {error} = await sb.from('tickets').update({transfer_code: codigo, transfer_code_expires: expires}).eq('id', id);
     if(error){ toast('Error generando el código: '+error.message, true); return; }
     const t = this.tickets.find(x=>x.id===id);
     if(t){ t.transfer_code = codigo; t.transfer_code_expires = expires; }
-    toast('Código generado: '+codigo+' · válido por 30 minutos');
+    toast('Código generado: '+codigo+' · ticket bloqueado por 5 minutos');
     this.renderTransferir();
   },
   async cancelarTransferencia(id){
@@ -5176,6 +5232,16 @@ const QRApp = {
       this.registrarLectura(codigo,'fallida','ya_escaneado',ticket);
       this.showResult('warn', 'Entrada ya fue escaneada', `Escaneado el ${fmtTime(ticket.escaneado_hora)} por ${ticket.escaneado_por||''}`);
       speak('Entrada ya fue escaneada');
+      return;
+    }
+    // Bloqueo de seguridad: mientras el cliente tenga un código de
+    // transferencia activo (ver UsuarioApp.generarCodigoTransferencia), el
+    // ticket no puede usarse para ingresar, para evitar que se use mientras
+    // está en proceso de pasar a otro dueño.
+    if(ticket.transfer_code && ticket.transfer_code_expires && new Date(ticket.transfer_code_expires) > new Date()){
+      this.registrarLectura(codigo,'fallida','bloqueado_transferencia',ticket);
+      this.showResult('warn', 'Ticket bloqueado', 'Este ticket está en proceso de transferencia a otro dueño y no puede usarse hasta que finalice o expire.');
+      speak('Ticket bloqueado');
       return;
     }
     const now = new Date().toISOString();
