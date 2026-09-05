@@ -590,7 +590,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 .map-obj.mesa.libre .obj-mesa{border-color:var(--cyan); box-shadow:0 0 10px rgba(0,240,255,.5), inset 0 2px 0 rgba(255,255,255,.5);}
 .map-obj.mesa.llena .obj-mesa{border-color:var(--bad); background:radial-gradient(circle at 35% 30%, #ffdada, #d88a8a 65%, #a94f4f 100%);}
-.map-obj.mesa.tuya .obj-mesa{border-color:var(--lime); box-shadow:0 0 12px var(--lime);}
+.map-obj.mesa.tuya .obj-mesa{border-color:#fff200; box-shadow:0 0 14px #fff200, 0 0 24px rgba(255,242,0,.6);}
 .map-obj.mesa[data-clicable="1"] .obj-mesa{cursor:pointer;}
 .map-obj .obj-mesa-txt{font-size:8.5px; line-height:1.15; color:#241c08; font-weight:700; padding:2px; font-family:'Rajdhani',sans-serif;}
 .map-obj .obj-cfg{
@@ -604,7 +604,8 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 .seat.free{background:#0a2a2e; border-color:var(--cyan); box-shadow:0 0 6px var(--cyan), 0 0 2px var(--cyan) inset; animation:seatPulse 1.8s ease-in-out infinite;}
 .seat.taken{background:linear-gradient(120deg, var(--pink), var(--violet)); box-shadow:0 0 6px rgba(255,46,224,.5);}
-.seat.you{background:var(--lime); box-shadow:0 0 10px var(--lime);}
+.seat.you{background:#fff200; box-shadow:0 0 12px #fff200, 0 0 22px rgba(255,242,0,.6); border-color:#fff200; animation:seatMinePulse 1.4s ease-in-out infinite;}
+@keyframes seatMinePulse{0%,100%{box-shadow:0 0 10px #fff200, 0 0 18px rgba(255,242,0,.55);}50%{box-shadow:0 0 16px #fff200, 0 0 30px rgba(255,242,0,.8);}}
 .seat.selected{background:var(--gold); box-shadow:0 0 12px var(--gold), 0 0 0 2px #fff inset; animation:seatSelectedPulse 1s ease-in-out infinite;}
 @keyframes seatSelectedPulse{0%,100%{transform:scale(1);}50%{transform:scale(1.25);}}
 @keyframes seatPulse{0%,100%{box-shadow:0 0 4px var(--cyan), 0 0 2px var(--cyan) inset;}50%{box-shadow:0 0 11px var(--cyan), 0 0 4px var(--cyan) inset;}}
@@ -2122,7 +2123,7 @@ const MapView = {
       }
     });
     vipSeats.sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
-    const myNum = myTicket ? myTicket.ubicacion_detalle : null;
+    const myNums = new Set((Array.isArray(myTicket) ? myTicket : (myTicket ? [myTicket] : [])).map(t=>t.ubicacion_detalle).filter(Boolean));
     const palcoKeys = Object.keys(palcos).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
 
     // ---- build zone definitions (key, label, cols, rows, seat list) ----
@@ -2225,7 +2226,7 @@ const MapView = {
     objetos.filter(o=>o.tipo==='mesa' && o.catKey).forEach(o=>{
       const deLaCategoria = asientos.filter(a=>a.zona===o.catKey);
       const libres = deLaCategoria.filter(a=>!a.ocupado);
-      const miAsiento = myNum ? deLaCategoria.find(a=>a.numero===myNum) : null;
+      const miAsiento = deLaCategoria.find(a=>myNums.has(a.numero)) || null;
       mesaEstado[o.id] = {total:deLaCategoria.length, libres:libres.length, siguienteLibre: libres[0]||null, esTuya: !!miAsiento};
     });
 
@@ -2234,7 +2235,7 @@ const MapView = {
 
     // ---- render HTML ----
     const seatEl = (s, extraTitle)=>{
-      const cls = s.numero===myNum ? 'you' : (s.ocupado?'taken':'free');
+      const cls = myNums.has(s.numero) ? 'you' : (s.ocupado?'taken':'free');
       return `<div class="seat ${cls}" data-num="${s.numero}" data-id="${s.id}" data-info="${escapeHtml(extraTitle)}"></div>`;
     };
     const zonesHtml = zones.map(z=>{
@@ -3082,6 +3083,8 @@ const EventSlider = {
 const UsuarioApp = {
   tickets: [],
   evento: null,
+  eventosDisponibles: [], // eventos distintos entre los tickets del usuario (para el selector del mapa)
+  mapaEventoId: null, // evento que el usuario está viendo actualmente en la pestaña "Mapa del evento"
   compra: null,
   goComprar(){
     Auth.setRole('usuario', {value:''}, 'Comprador');
@@ -3097,6 +3100,18 @@ const UsuarioApp = {
     Router.go('usuario');
     this.tab('u-comprar');
   },
+  // A partir de this.tickets, calcula la lista de eventos distintos para los
+  // que el usuario tiene entradas (puede tener tickets de varios eventos).
+  async cargarEventosDisponibles(){
+    const ids = Array.from(new Set((this.tickets||[]).map(t=>t.evento_id).filter(Boolean)));
+    if(!ids.length){ this.eventosDisponibles = []; return; }
+    const {data, error} = await sb.from('eventos').select('*').in('id', ids);
+    this.eventosDisponibles = (!error && data) ? data : [];
+    if(this.evento){
+      const actualizado = this.eventosDisponibles.find(e=>e.id===this.evento.id);
+      if(actualizado) this.evento = actualizado;
+    }
+  },
   async login(){
     const val = document.getElementById('userLookup').value.trim();
     if(!val){ toast('Ingresa tu correo o cédula', true); return; }
@@ -3107,6 +3122,8 @@ const UsuarioApp = {
     const evId = data[0].evento_id;
     const {data: evs} = await sb.from('eventos').select('*').eq('id', evId).limit(1);
     this.evento = evs && evs[0];
+    this.mapaEventoId = this.evento ? this.evento.id : null;
+    await this.cargarEventosDisponibles();
     Auth.setRole('usuario', {value:val}, 'Usuario');
     renderEventPill(this.evento);
     document.getElementById('waLink').href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent('Hola, tengo una novedad con mi entrada ('+val+')')}`;
@@ -3124,6 +3141,8 @@ const UsuarioApp = {
     const evId = data[0].evento_id;
     const {data: evs} = await sb.from('eventos').select('*').eq('id', evId).limit(1);
     this.evento = evs && evs[0];
+    this.mapaEventoId = this.evento ? this.evento.id : null;
+    await this.cargarEventosDisponibles();
     const idVal = data[0].correo || data[0].cedula || val;
     document.getElementById('userLookup').value = idVal;
     Auth.setRole('usuario', {value:idVal}, 'Usuario');
@@ -3185,12 +3204,7 @@ const UsuarioApp = {
       ChatKit.subscribe(this.sala, document.getElementById('uChatMsgs'), 'usuario');
     }
     if(name==='u-mapa'){
-      const mapaBox = document.getElementById('u-mapa');
-      mapaBox.innerHTML = `<div class="card" style="margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
-        <p class="hint" style="margin:0;">Consulta la disposición de zonas y ubicaciones del evento.</p>
-        <button class="btn btn-primary" onclick="UsuarioApp.tab('u-comprar')">Comprar tickets</button>
-      </div><div id="u-mapa-canvas"></div>`;
-      MapView.render(document.getElementById('u-mapa-canvas'), this.evento ? this.evento.id : null, this.tickets[0]);
+      this.renderMapaTab();
     }
     if(name==='u-comprar') this.renderComprar();
     if(name==='u-transferir') this.renderTransferir();
@@ -3207,7 +3221,42 @@ const UsuarioApp = {
     const {data, error} = await sb.from('tickets').select('*').or(`correo.eq.${val},cedula.eq.${val}`).order('created_at',{ascending:true});
     if(error || !data || !data.length) return;
     this.tickets = data;
+    await this.cargarEventosDisponibles();
     if(Router.current==='usuario') this.renderTickets();
+  },
+  // ---- pestaña "Mapa del evento": selector de evento + resalta en amarillo
+  // brillante todas las ubicaciones que el usuario compró para ese evento ----
+  renderMapaTab(){
+    const mapaBox = document.getElementById('u-mapa');
+    // Si el usuario tiene tickets de más de un evento, deja elegir cuál ver.
+    if(!this.eventosDisponibles.length && this.evento) this.eventosDisponibles = [this.evento];
+    if(!this.mapaEventoId || !this.eventosDisponibles.find(e=>e.id===this.mapaEventoId)){
+      this.mapaEventoId = (this.evento && this.evento.id) || (this.eventosDisponibles[0] && this.eventosDisponibles[0].id) || null;
+    }
+    const selectorHtml = this.eventosDisponibles.length>1 ? `
+      <div class="field" style="min-width:220px; margin:0;">
+        <label>Ver mapa del evento</label>
+        <select id="uMapaEventoSelect">
+          ${this.eventosDisponibles.map(e=>`<option value="${e.id}" ${e.id===this.mapaEventoId?'selected':''}>${escapeHtml(e.nombre||'Evento')}</option>`).join('')}
+        </select>
+      </div>` : '';
+    mapaBox.innerHTML = `<div class="card" style="margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+      <p class="hint" style="margin:0;">Consulta la disposición de zonas y ubicaciones del evento. Tus ubicaciones compradas se ven resaltadas en <b style="color:#fff200;">amarillo brillante</b>.</p>
+      ${selectorHtml}
+      <button class="btn btn-primary" onclick="UsuarioApp.tab('u-comprar')">Comprar tickets</button>
+    </div><div id="u-mapa-canvas"></div>`;
+    const select = document.getElementById('uMapaEventoSelect');
+    if(select) select.addEventListener('change', ()=>{
+      this.mapaEventoId = select.value;
+      this.pintarMapaEvento();
+    });
+    this.pintarMapaEvento();
+  },
+  // Dibuja el mapa del evento seleccionado, resaltando en amarillo TODAS las
+  // ubicaciones (una o varias) que el usuario compró para ese evento en particular.
+  pintarMapaEvento(){
+    const misTicketsDelEvento = (this.tickets||[]).filter(t=> t.evento_id===this.mapaEventoId && t.estado!=='anulado');
+    MapView.render(document.getElementById('u-mapa-canvas'), this.mapaEventoId, misTicketsDelEvento);
   },
   /* ---------- Transferencia P2P de tickets (código de 4 dígitos) ---------- */
   renderTransferir(){
