@@ -10,9 +10,6 @@
 <link rel="preconnect" href="https://ukmmrbjmeumjkxdblmgc.supabase.co">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-<!-- Visor 3D de Spline (versión "web component" para HTML plano; equivalente
-     al paquete @splinetool/react-spline pero sin necesitar React/Next.js) -->
-<script type="module" src="https://unpkg.com/@splinetool/viewer@1.9.35/build/spline-viewer.js"></script>
 <!-- qrcodejs y html5-qrcode ya NO se cargan aquí: se cargan bajo demanda (ver loadScriptOnce) solo cuando
      el usuario realmente entra a la pantalla que los necesita (ver tickets, escanear QR).
      Esto evita descargar y parsear JS que la mayoría de sesiones nunca usa. -->
@@ -395,20 +392,15 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
   from{ opacity:0; transform:translateY(38px) rotate(var(--fan-rot,0deg)) scale(.86); }
   to{ opacity:1; transform:translateY(0) rotate(0deg) scale(1); }
 }
-/* ---------- fondo 3D (Spline) detrás de "Mis tickets" ---------- */
-.tickets-scene-wrap{ position:relative; }
-.tickets-spline-bg{
-  position:absolute; inset:0; width:100%; height:100%;
-  z-index:0; pointer-events:none; border-radius:20px; overflow:hidden;
-}
 #u-tickets{ position:relative; z-index:1; }
 
 .ticket{
-  --stub-w:118px;
+  --stub-w:150px;
   position:relative; margin:0 0 30px; transform-origin:top center;
   animation:ticketFanIn .62s cubic-bezier(.22,.9,.32,1) both;
+  contain:layout paint;
 }
-@media(max-width:560px){ .ticket{ --stub-w:86px; margin-bottom:26px; } }
+@media(max-width:560px){ .ticket{ --stub-w:118px; margin-bottom:26px; } }
 .ticket:nth-child(odd){ --fan-rot:-6deg; }
 .ticket:nth-child(even){ --fan-rot:6deg; }
 .ticket:nth-child(1){ animation-delay:.02s; }
@@ -421,9 +413,10 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .ticket-shell{
   position:relative; display:flex; align-items:stretch; min-height:180px; border-radius:20px; overflow:hidden;
   border:1px solid var(--line-soft); box-shadow:var(--shadow); transition:.25s;
-  /* Translúcido tipo "vidrio" para que la escena 3D de Spline se vea a través
-     de la tarjeta (antes era un fondo sólido #0d0818). */
-  background:rgba(13,8,24,.28); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);
+  /* Fondo sólido (antes era translúcido + backdrop-filter para dejar ver el
+     fondo 3D de Spline; al quitar Spline se vuelve sólido: se ve igual de
+     bien y es mucho más liviano de renderizar). */
+  background:#12081f;
 }
 /* muescas circulares "troqueladas" donde se separa el stub del cuerpo del ticket */
 .ticket-shell::before,.ticket-shell::after{
@@ -446,7 +439,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 .t-stub-qr{
   position:relative; z-index:1; background:#fff; padding:6px; border-radius:10px;
-  width:min(78px, calc(var(--stub-w) - 24px)); height:min(78px, calc(var(--stub-w) - 24px));
+  width:min(102px, calc(var(--stub-w) - 24px)); height:min(102px, calc(var(--stub-w) - 24px));
   box-shadow:0 0 14px rgba(0,0,0,.35); flex-shrink:0; cursor:zoom-in; transition:transform .15s ease;
 }
 .t-stub-qr:hover{ transform:scale(1.06); }
@@ -462,8 +455,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 /* ---- cuerpo principal del ticket ---- */
 .t-body{
   flex:1; min-width:0; position:relative; z-index:1; padding:16px 18px 14px;
-  background:linear-gradient(160deg, rgba(24,16,42,.62), rgba(16,10,32,.7));
-  backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px);
+  background:linear-gradient(160deg, #18102a, #100a20);
   display:flex; flex-direction:column; gap:5px;
 }
 .t-body .evt-name{font-size:12.5px; color:var(--text-dim); font-family:'Rajdhani',sans-serif; font-weight:600; letter-spacing:.02em; margin-top:2px;}
@@ -504,14 +496,21 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 .ticket:hover .ticket-shell{ box-shadow:var(--shadow), var(--glow-violet); }
 .t-body{ overflow:hidden; }
-/* brillo tipo "vidrio pulido" que recorre la tarjeta en diagonal */
+/* brillo tipo "vidrio pulido" que recorre la tarjeta en diagonal.
+   Se anima con "transform" (acelerado por GPU) en vez de "background-position"
+   (que obliga a repintar en cada frame) para que se vea fluido incluso con
+   varios tickets en pantalla a la vez. */
 .t-body::after{
-  content:''; position:absolute; inset:0; z-index:2; pointer-events:none;
-  background:linear-gradient(115deg, transparent 42%, rgba(255,255,255,.28) 50%, transparent 58%);
-  background-size:280% 280%; mix-blend-mode:overlay;
+  content:''; position:absolute; top:-60%; left:-35%; width:35%; height:220%;
+  z-index:2; pointer-events:none; transform:translateX(-40%) rotate(18deg);
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.32), transparent);
+  mix-blend-mode:overlay; will-change:transform;
   animation: sheenSweep 5.2s ease-in-out infinite;
 }
-@keyframes sheenSweep{ 0%{background-position:200% 200%;} 55%,100%{background-position:-30% -30%;} }
+@keyframes sheenSweep{
+  0%{ transform:translateX(-40%) rotate(18deg); }
+  55%,100%{ transform:translateX(420%) rotate(18deg); }
+}
 @media (prefers-reduced-motion: reduce){
   .ticket-shell{ animation:ticketFanIn .62s cubic-bezier(.22,.9,.32,1) both; }
   .t-body::after{ animation:none; }
@@ -983,10 +982,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="u-mapa" onclick="UsuarioApp.tab('u-mapa')">Mapa del evento</div>
         <div class="pill-tab" data-tab="u-transferir" onclick="UsuarioApp.tab('u-transferir')">Transferir tickets</div>
       </div>
-      <div class="tickets-scene-wrap">
-        <spline-viewer class="tickets-spline-bg" url="https://prod.spline.design/nsWByDjE6O9J-PMd/scene.splinecode"></spline-viewer>
-        <div id="u-tickets" class="tab-pane"></div>
-      </div>
+      <div id="u-tickets" class="tab-pane"></div>
       <div id="u-comprar" class="tab-pane hide"></div>
       <div id="u-chat" class="tab-pane hide">
         <div class="grid-2">
