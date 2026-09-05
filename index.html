@@ -4648,7 +4648,10 @@ const AdminApp = {
     const tablas = ['mensajes','solicitudes_compra','recibos_caja','lecturas_qr','asientos','tickets','vendedores','eventos'];
     const fallos = [];
     for(const t of tablas){
-      const {error} = await sb.from(t).delete().neq('id','00000000-0000-0000-0000-000000000000');
+      // 'id is not null' funciona sin importar si la columna id es uuid o bigint
+      // (a diferencia de comparar con un UUID de relleno, que falla en tablas
+      // como recibos_caja donde id es bigint).
+      const {error} = await sb.from(t).delete().not('id','is',null);
       if(error){ fallos.push(t+': '+error.message); }
     }
     this.eventos=[]; this.evento=null; this.tickets=[];
