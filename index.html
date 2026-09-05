@@ -5614,7 +5614,11 @@ document.addEventListener('DOMContentLoaded', async ()=>{
 ========================================================= */
 async function checkBoldReturn(){
   const params = new URLSearchParams(location.search);
-  const orderId = params.get('bold-order-id') || params.get('bold_order_id') || sessionStorage.getItem('glm_bold_order_id');
+  // SOLO procesamos una respuesta de Bold cuando Bold devolvió explícitamente
+  // un order_id en la URL. No usamos el order_id guardado en sessionStorage
+  // como disparador automático, porque eso hacía que una orden pendiente de
+  // un intento anterior reapareciera cada vez que se abría/refrescaba la página.
+  const orderId = params.get('bold-order-id') || params.get('bold_order_id');
   if(!orderId) return;
 
   const solicitudId = params.get('solicitud_id') || params.get('solicitud-id') || sessionStorage.getItem('glm_bold_solicitud_id') || '';
@@ -5625,7 +5629,7 @@ async function checkBoldReturn(){
       <div class="modal" style="text-align:center;">
         <div class="section-title"><h2 style="font-size:19px;">Confirmando tu pago con Bold…</h2></div>
         <p class="hint" id="boldResultMsg">Estamos verificando el estado de tu transacción, esto puede tardar unos segundos.</p>
-        <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="document.getElementById('boldResultModal').remove()">Cerrar</button>
+        <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="clearBoldOrder();document.getElementById('boldResultModal')?.remove()">Cerrar</button>
       </div>
     </div>`);
 
@@ -5665,8 +5669,11 @@ async function checkBoldReturn(){
       clearBoldOrder();
     }else if(estado==='aprobada'){
       msg.innerHTML = 'El pago fue aprobado y estamos terminando de generar tus entradas. Espera unos segundos y consulta "Mis tickets" con tu correo o cédula.';
+      // Evita que la orden reaparezca en un refresco mientras el webhook termina.
+      clearBoldOrder();
     }else{
-      msg.innerHTML = 'Seguimos confirmando tu pago con el banco. En unos minutos podrás ver tus tickets ingresando con tu correo o cédula.';
+      msg.innerHTML = 'No se pudo confirmar ningún pago. Si no realizaste el pago, no se generaron entradas. Puedes cerrar esta ventana y volver a intentarlo cuando quieras.';
+      clearBoldOrder();
     }
   }
 }
