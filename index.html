@@ -432,7 +432,6 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 .ticket-shell::before{top:-12px;}
 .ticket-shell::after{bottom:-12px;}
-.ticket:hover .ticket-shell{box-shadow:var(--shadow), var(--glow-violet); transform:translateY(-3px);}
 /* ---- stub izquierdo: holograma animado + QR ---- */
 .t-stub{
   width:var(--stub-w); min-width:var(--stub-w); position:relative; z-index:1; flex-shrink:0;
@@ -481,6 +480,88 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .ticket .scan-flag.pending{background:rgba(255,255,255,.06); color:var(--text-dim); border-color:var(--line-soft); box-shadow:none;}
 @media(max-width:560px){ .t-body .title{padding-right:0;} .ticket .scan-flag{position:static; margin-bottom:6px; display:inline-flex; max-width:none;} }
 .ticket-share{margin-top:10px;}
+
+/* =========================================================
+   TICKET 3D — profundidad y movimiento continuo + variantes
+   de color por zona: dorado brillante (Palco), azul neón (VIP)
+   y verde (General). El QR, el layout y los datos no cambian:
+   solo se le da volumen/brillo/movimiento a la tarjeta.
+========================================================= */
+:root{
+  --gold-1:#fff6d2; --gold-2:#ffd54d; --gold-3:#a9750c;
+  --vip-1:#eafcff; --vip-2:#00c3ff; --vip-3:#0033ff;
+  --gen-1:#eafff2; --gen-2:#22ff9c; --gen-3:#0aa35e;
+}
+.ticket{ perspective:1100px; }
+.ticket-shell{
+  transform-style:preserve-3d; will-change:transform;
+  animation: ticketFanIn .62s cubic-bezier(.22,.9,.32,1) both, ticketDrift3D 7s ease-in-out infinite;
+}
+@keyframes ticketDrift3D{
+  0%{   transform:perspective(1100px) rotateX(3deg)  rotateY(-4deg) translateY(0)   translateZ(0); }
+  50%{  transform:perspective(1100px) rotateX(-3deg) rotateY(4deg)  translateY(-7px) translateZ(16px); }
+  100%{ transform:perspective(1100px) rotateX(3deg)  rotateY(-4deg) translateY(0)   translateZ(0); }
+}
+.ticket:hover .ticket-shell{ box-shadow:var(--shadow), var(--glow-violet); }
+.t-body{ overflow:hidden; }
+/* brillo tipo "vidrio pulido" que recorre la tarjeta en diagonal */
+.t-body::after{
+  content:''; position:absolute; inset:0; z-index:2; pointer-events:none;
+  background:linear-gradient(115deg, transparent 42%, rgba(255,255,255,.28) 50%, transparent 58%);
+  background-size:280% 280%; mix-blend-mode:overlay;
+  animation: sheenSweep 5.2s ease-in-out infinite;
+}
+@keyframes sheenSweep{ 0%{background-position:200% 200%;} 55%,100%{background-position:-30% -30%;} }
+@media (prefers-reduced-motion: reduce){
+  .ticket-shell{ animation:ticketFanIn .62s cubic-bezier(.22,.9,.32,1) both; }
+  .t-body::after{ animation:none; }
+}
+
+/* ---- PALCO: tarjeta dorada brillante ---- */
+.ticket[data-zona="palco"] .ticket-shell{
+  border-color:rgba(255,213,77,.55);
+  background:linear-gradient(160deg, rgba(64,45,10,.6), rgba(18,12,3,.78));
+  box-shadow:var(--shadow), inset 0 1px 0 rgba(255,246,210,.35), inset 0 -22px 34px -14px rgba(0,0,0,.55);
+  animation: ticketFanIn .62s cubic-bezier(.22,.9,.32,1) both, ticketDrift3D 7s ease-in-out infinite, goldGlowPulse 3.2s ease-in-out infinite;
+}
+.ticket[data-zona="palco"] .t-stub{ background:conic-gradient(from 120deg, var(--gold-1), var(--gold-2), var(--gold-3), var(--gold-2), var(--gold-1)); background-size:200% 200%; }
+.ticket[data-zona="palco"] .t-body .cat{ color:var(--gold-2); text-shadow:0 0 12px rgba(255,213,77,.65); }
+.ticket[data-zona="palco"] .t-body .title{ text-shadow:0 0 16px rgba(255,213,77,.25); }
+@keyframes goldGlowPulse{
+  0%,100%{ box-shadow:var(--shadow), inset 0 1px 0 rgba(255,246,210,.35), inset 0 -22px 34px -14px rgba(0,0,0,.55), 0 0 22px rgba(255,213,77,.3), 0 0 50px rgba(169,117,12,.16); }
+  50%{     box-shadow:var(--shadow), inset 0 1px 0 rgba(255,246,210,.35), inset 0 -22px 34px -14px rgba(0,0,0,.55), 0 0 42px rgba(255,213,77,.6),  0 0 90px rgba(169,117,12,.32); }
+}
+
+/* ---- VIP: tarjeta azul neón brillante ---- */
+.ticket[data-zona="vip"] .ticket-shell{
+  border-color:rgba(0,195,255,.55);
+  background:linear-gradient(160deg, rgba(6,26,48,.62), rgba(4,10,22,.8));
+  box-shadow:var(--shadow), inset 0 1px 0 rgba(210,247,255,.3), inset 0 -22px 34px -14px rgba(0,0,0,.55);
+  animation: ticketFanIn .62s cubic-bezier(.22,.9,.32,1) both, ticketDrift3D 7s ease-in-out infinite, vipGlowPulse 2.8s ease-in-out infinite;
+}
+.ticket[data-zona="vip"] .t-stub{ background:conic-gradient(from 120deg, var(--vip-1), var(--vip-2), var(--vip-3), var(--vip-2), var(--vip-1)); background-size:200% 200%; }
+.ticket[data-zona="vip"] .t-body .cat{ color:var(--vip-2); text-shadow:0 0 12px rgba(0,195,255,.7); }
+.ticket[data-zona="vip"] .t-body .title{ text-shadow:0 0 16px rgba(0,195,255,.25); }
+@keyframes vipGlowPulse{
+  0%,100%{ box-shadow:var(--shadow), inset 0 1px 0 rgba(210,247,255,.3), inset 0 -22px 34px -14px rgba(0,0,0,.55), 0 0 22px rgba(0,195,255,.35), 0 0 50px rgba(0,51,255,.18); }
+  50%{     box-shadow:var(--shadow), inset 0 1px 0 rgba(210,247,255,.3), inset 0 -22px 34px -14px rgba(0,0,0,.55), 0 0 44px rgba(0,195,255,.7),  0 0 95px rgba(0,51,255,.35); }
+}
+
+/* ---- GENERAL: tarjeta verde ---- */
+.ticket[data-zona="general"] .ticket-shell{
+  border-color:rgba(34,255,156,.5);
+  background:linear-gradient(160deg, rgba(8,40,26,.6), rgba(4,14,10,.8));
+  box-shadow:var(--shadow), inset 0 1px 0 rgba(220,255,238,.28), inset 0 -22px 34px -14px rgba(0,0,0,.55);
+  animation: ticketFanIn .62s cubic-bezier(.22,.9,.32,1) both, ticketDrift3D 7s ease-in-out infinite, genGlowPulse 3s ease-in-out infinite;
+}
+.ticket[data-zona="general"] .t-stub{ background:conic-gradient(from 120deg, var(--gen-1), var(--gen-2), var(--gen-3), var(--gen-2), var(--gen-1)); background-size:200% 200%; }
+.ticket[data-zona="general"] .t-body .cat{ color:var(--gen-2); text-shadow:0 0 12px rgba(34,255,156,.65); }
+.ticket[data-zona="general"] .t-body .title{ text-shadow:0 0 16px rgba(34,255,156,.2); }
+@keyframes genGlowPulse{
+  0%,100%{ box-shadow:var(--shadow), inset 0 1px 0 rgba(220,255,238,.28), inset 0 -22px 34px -14px rgba(0,0,0,.55), 0 0 20px rgba(34,255,156,.32), 0 0 46px rgba(10,163,94,.16); }
+  50%{     box-shadow:var(--shadow), inset 0 1px 0 rgba(220,255,238,.28), inset 0 -22px 34px -14px rgba(0,0,0,.55), 0 0 38px rgba(34,255,156,.6),  0 0 82px rgba(10,163,94,.3); }
+}
+
 
 /* ---------- scanner (QR view) ---------- */
 .scan-stage{
@@ -2900,8 +2981,9 @@ const UsuarioApp = {
     box.innerHTML = this.tickets.map(t=>{
       const scanned = t.escaneado;
       const evNombre = nombresPorEvento[t.evento_id] || '';
+      const zonaKey = (t.ubicacion_tipo||t.categoria||'').toString().toLowerCase();
       return `
-      <div class="ticket">
+      <div class="ticket" data-zona="${escapeHtml(zonaKey)}">
         <div class="ticket-shell">
           <div class="t-stub">
             <div class="t-stub-qr" id="qr-${t.id}" onclick="UsuarioApp.ampliarQR('${t.id}')" title="Toca para ampliar el QR"></div>
