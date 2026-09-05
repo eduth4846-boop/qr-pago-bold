@@ -4641,12 +4641,24 @@ const AdminApp = {
   async resetAll(){
     if(!confirm('¿Seguro que deseas borrar TODOS los registros? Esta acción no se puede deshacer.')) return;
     if(!confirm('Confirma una vez más: se eliminarán eventos, tickets, usuarios y chats.')) return;
-    for(const t of ['mensajes','solicitudes_compra','comprobantes','asientos','tickets','vendedores','eventos']){
-      await sb.from(t).delete().neq('id','00000000-0000-0000-0000-000000000000');
+    // Orden importante: primero las tablas "hijas" que referencian a tickets/eventos
+    // por llave foránea (recibos_caja y lecturas_qr referencian tickets/eventos),
+    // luego tickets/asientos/vendedores, y al final eventos. 'comprobantes' NO es
+    // una tabla (es el bucket de Storage), así que se quitó de esta lista.
+    const tablas = ['mensajes','solicitudes_compra','recibos_caja','lecturas_qr','asientos','tickets','vendedores','eventos'];
+    const fallos = [];
+    for(const t of tablas){
+      const {error} = await sb.from(t).delete().neq('id','00000000-0000-0000-0000-000000000000');
+      if(error){ fallos.push(t+': '+error.message); }
     }
     this.eventos=[]; this.evento=null; this.tickets=[];
     renderEventPill(null);
-    toast('Todos los registros fueron eliminados');
+    await this.loadEventos();
+    if(fallos.length){
+      toast('No se pudieron borrar algunas tablas: '+fallos.join(' | '), true);
+    } else {
+      toast('Todos los registros fueron eliminados');
+    }
     this.renderEventos();
   },
 
