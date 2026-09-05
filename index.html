@@ -1753,8 +1753,46 @@ const CategoriaServicio = {
     return cats;
   },
   find(evento, key){ return this.list(evento).find(c=>c.key===key); },
+  // ---- Visibilidad / gratuidad / autorización por tipo de ticket ----
+  // El admin puede, por cada tipo de ticket (Palco, VIP, General o una
+  // categoría personalizada), ocultar su botón de pago (no se muestra al
+  // usuario en "Comprar tickets"), marcarlo como gratis (apaga el valor sin
+  // borrar el precio guardado, por si luego se vuelve a activar) y elegir si
+  // un ticket gratis se genera automáticamente o requiere autorización del
+  // administrador antes de entregarse.
+  oculta(evento, key){
+    const mapa = (evento && evento.mapa) || {};
+    if(key==='palco') return !!(mapa.ocultos && mapa.ocultos.palco);
+    if(key==='vip') return !!(mapa.ocultos && mapa.ocultos.vip);
+    if(key==='general') return !!(mapa.ocultos && mapa.ocultos.general);
+    const cat = (mapa.categorias||[]).find(c=>c.id===key);
+    return cat ? !!cat.oculto : false;
+  },
+  esGratis(evento, key){
+    const mapa = (evento && evento.mapa) || {};
+    if(key==='palco') return !!(mapa.gratis && mapa.gratis.palco);
+    if(key==='vip') return !!(mapa.gratis && mapa.gratis.vip);
+    if(key==='general') return !!(mapa.gratis && mapa.gratis.general);
+    const cat = (mapa.categorias||[]).find(c=>c.id===key);
+    return cat ? !!cat.gratis : false;
+  },
+  // 'automatica' (el ticket se genera solo, sin intervención del admin) o
+  // 'admin' (queda pendiente hasta que el admin la autorice, igual que una
+  // solicitud de transferencia manual).
+  autorizacion(evento, key){
+    const mapa = (evento && evento.mapa) || {};
+    let val;
+    if(key==='palco') val = mapa.autorizacion && mapa.autorizacion.palco;
+    else if(key==='vip') val = mapa.autorizacion && mapa.autorizacion.vip;
+    else if(key==='general') val = mapa.autorizacion && mapa.autorizacion.general;
+    else { const cat = (mapa.categorias||[]).find(c=>c.id===key); val = cat && cat.autorizacion; }
+    return val || 'automatica';
+  },
   // Precio base configurado para la categoría (silla o cupo, sin servicio).
+  // Si la categoría está marcada como "gratis", siempre devuelve 0 aunque
+  // haya un precio guardado (así el admin puede reactivarlo sin re-escribirlo).
   precioBase(evento, key){
+    if(this.esGratis(evento, key)) return 0;
     const mapa = (evento && evento.mapa) || {};
     if(key==='palco') return Number(mapa.precios && mapa.precios.palco)||0;
     if(key==='vip') return Number(mapa.precios && mapa.precios.vip)||0;
@@ -2673,7 +2711,10 @@ const UsuarioApp = {
     this.compra.evento = evento;
     if(!evento){ box.innerHTML = `<div class="card"><p class="hint">No hay un evento activo disponible para la venta en este momento.</p></div>`; return; }
     await Seats.ensureSeeded(evento);
-    const asientos = (await Seats.all(evento.id)).filter(a=>!a.ocupado);
+    // Las ubicaciones cuyo tipo de ticket el admin marcó como "oculto" no se
+    // muestran ni quedan disponibles para comprar (ni en la lista ni en el
+    // mapa), sin borrar sus asientos ni su configuración.
+    const asientos = (await Seats.all(evento.id)).filter(a=>!a.ocupado).filter(a=>!CategoriaServicio.oculta(evento, a.zona));
     this.compra.asientos = asientos;
     this.compra.seleccion = {};
     const hayServicio = CategoriaServicio.list(evento).some(c=>CategoriaServicio.valorServicio(evento,c.key)>0);
@@ -2775,10 +2816,19 @@ const UsuarioApp = {
   abrirPago(){
     const {items, servicioTotal, total} = this.actualizarTotalesCompra();
     if(!items.length) return;
-    const pago_qr = this.compra.evento.mapa && this.compra.evento.mapa.pago_qr;
-    const pago_link = this.compra.evento.mapa && this.compra.evento.mapa.pago_link;
-    const resumen = items.map(x=>`${escapeHtml(this.seatLabel(x.asiento))} — ${money(x.precio + CategoriaServicio.valorServicio(this.compra.evento, x.asiento.zona))}`).join('<br>');
+    const evento = this.compra.evento;
+    const pago_qr = evento.mapa && evento.mapa.pago_qr;
+    const pago_link = evento.mapa && evento.mapa.pago_link;
+    const resumen = items.map(x=>`${escapeHtml(this.seatLabel(x.asiento))} — ${money(x.precio + CategoriaServicio.valorServicio(evento, x.asiento.zona))}`).join('<br>');
     const servicioLinea = servicioTotal>0 ? `<div class="hint" style="margin-bottom:10px;">Incluye servicio: ${money(servicioTotal)}</div>` : '';
+    // Si el total a pagar es $0 (todas las ubicaciones seleccionadas son de un
+    // tipo de ticket que el admin marcó como "gratis"), no tiene sentido
+    // mostrar el botón de Bold ni la transferencia manual: en su lugar se
+    // ofrece un botón para confirmar la reserva gratuita directamente. El
+    // botón y el flujo de Bold no se tocan, solo se dejan de insertar en el
+    // HTML cuando el total es 0.
+    const esGratis = total<=0;
+    const requiereAutorizacion = esGratis && items.some(x=>CategoriaServicio.autorizacion(evento, x.asiento.zona)==='admin');
     // Si la ventana de pago ya está abierta (el cliente tocó otra ubicación
     // en el mapa mientras la tenía abierta), solo se actualiza el resumen y
     // el total, para no perder un comprobante que ya haya adjuntado.
@@ -2796,13 +2846,9 @@ const UsuarioApp = {
       if(enviarBtn) enviarBtn.setAttribute('onclick', `UsuarioApp.enviarComprobante(${total})`);
       return;
     }
-    document.body.insertAdjacentHTML('beforeend', `
-      <div class="modal-bg" id="pagoModal">
-        <div class="modal">
-          <div class="section-title"><h2 style="font-size:19px;">Pagar tickets</h2></div>
-          <div class="hint" style="margin-bottom:10px;" data-pago-resumen>${resumen}</div>
-          <div data-pago-servicio>${servicioLinea}</div>
-          <div><b>Total a pagar: <span style="color:var(--lime);" data-pago-total>${money(total)}</span></b></div>
+    const bloquePago = esGratis ? `
+          <button class="btn btn-primary btn-block" style="margin-top:14px;" id="gratisConfirmarBtn" onclick="UsuarioApp.confirmarGratis()">🎟️ Confirmar reserva gratuita</button>
+          <p class="hint" style="text-align:center; margin-top:6px;">${requiereAutorizacion ? 'Estos tickets no tienen costo, pero quedarán pendientes hasta que el administrador los autorice.' : 'Estos tickets no tienen costo y se generarán automáticamente al confirmar.'}</p>` : `
           <button class="btn btn-primary btn-block" style="margin-top:14px;" id="boldPagarBtn" onclick="UsuarioApp.pagarConBold(${total})">💳 Pagar con Bold (tarjeta, PSE, Nequi)</button>
           <p class="hint" style="text-align:center; margin-top:6px;">Pago 100% seguro procesado por Bold. Tus tickets se generan automáticamente en cuanto el banco confirma el pago.</p>
           <details style="margin-top:16px;">
@@ -2812,12 +2858,70 @@ const UsuarioApp = {
             <div class="field" style="margin-top:16px;"><label>Adjuntar comprobante de pago</label><input type="file" id="pagoComprobante" accept="image/*,.pdf"></div>
             <button class="btn btn-primary btn-block" style="margin-top:8px;" id="pagoEnviarBtn" onclick="UsuarioApp.enviarComprobante(${total})">Enviar comprobante</button>
             <p class="hint" style="margin-top:6px;">Esta opción requiere validación manual del administrador.</p>
-          </details>
+          </details>`;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="pagoModal">
+        <div class="modal">
+          <div class="section-title"><h2 style="font-size:19px;">${esGratis ? 'Confirmar tickets gratuitos' : 'Pagar tickets'}</h2></div>
+          <div class="hint" style="margin-bottom:10px;" data-pago-resumen>${resumen}</div>
+          <div data-pago-servicio>${servicioLinea}</div>
+          <div><b>Total a pagar: <span style="color:var(--lime);" data-pago-total>${money(total)}</span></b></div>
+          ${bloquePago}
           <div class="row" style="margin-top:14px;">
             <button class="btn btn-ghost btn-block" onclick="document.getElementById('pagoModal').remove()">Cancelar</button>
           </div>
         </div>
       </div>`);
+  },
+  // Confirma una reserva compuesta solo por ubicaciones "gratis". Si alguna
+  // de ellas pertenece a un tipo de ticket que el admin marcó con
+  // "Requiere autorización del admin", se crea una solicitud pendiente (igual
+  // que una transferencia manual) para que el admin la autorice desde
+  // "Solicitudes de compra". Si todas son de generación automática, los
+  // tickets se crean de inmediato, sin pasar por el admin.
+  async confirmarGratis(){
+    const evento = this.compra.evento;
+    const items = Object.values(this.compra.seleccion);
+    if(!items.length) return;
+    const btn = document.getElementById('gratisConfirmarBtn');
+    if(btn){ btn.disabled = true; btn.textContent = 'Confirmando...'; }
+    try{
+      const requiereAutorizacion = items.some(x=>CategoriaServicio.autorizacion(evento, x.asiento.zona)==='admin');
+      const itemsPayload = items.map(x=>({
+        asiento_id: x.asiento.id, zona: x.asiento.zona, categoria: x.asiento.zona,
+        ubicacion_detalle: this.seatLabel(x.asiento), precio: x.precio + CategoriaServicio.valorServicio(evento, x.asiento.zona)
+      }));
+      await Promise.all(itemsPayload.map(it=> sb.from('asientos').update({ocupado:true}).eq('id', it.asiento_id)));
+      if(requiereAutorizacion){
+        const {data, error} = await sb.from('solicitudes_compra').insert({
+          evento_id: evento.id, sala: this.compra.sala,
+          nombre: this.compra.comprador.nombre, cedula: this.compra.comprador.cedula,
+          correo: this.compra.comprador.correo, telefono: this.compra.comprador.telefono,
+          items: itemsPayload, total: 0, estado:'pendiente', metodo_pago:'gratis'
+        }).select();
+        if(error){ toast('No se pudo enviar la solicitud: '+error.message, true); if(btn){ btn.disabled=false; btn.textContent='🎟️ Confirmar reserva gratuita'; } return; }
+        await ChatKit.send(this.compra.sala, this.compra.comprador.nombre, 'usuario', 'SOLICITUD_COMPRA::'+data[0].id);
+        toast('Reserva enviada. Espera la autorización del administrador.');
+      } else {
+        const rows = itemsPayload.map(it=>({
+          evento_id: evento.id, codigo: genCode('TK'), codigo_validacion: genCode('VAL'),
+          categoria: it.categoria, ubicacion_tipo: it.zona, ubicacion_detalle: it.ubicacion_detalle,
+          precio: it.precio, nombre_cliente: this.compra.comprador.nombre, correo: this.compra.comprador.correo,
+          cedula: this.compra.comprador.cedula, tipo_pago: 'gratis', vt_usuario: 'Compra online', estado: 'vendido'
+        }));
+        const {data: created, error} = await sb.from('tickets').insert(rows).select();
+        if(error){ toast('No se pudieron generar los tickets: '+error.message, true); if(btn){ btn.disabled=false; btn.textContent='🎟️ Confirmar reserva gratuita'; } return; }
+        await Promise.all(itemsPayload.map((it,i)=> sb.from('asientos').update({ticket_id: created[i].id, ocupado:true}).eq('id', it.asiento_id)));
+        toast('¡Listo! Ya puedes ver tu(s) ticket(s) en "Mis entradas".');
+      }
+      const modal = document.getElementById('pagoModal');
+      if(modal) modal.remove();
+      this.compra.seleccion = {};
+      this.renderSeleccionUI();
+    }catch(err){
+      toast('Error confirmando la reserva gratuita: '+(err.message||err), true);
+      if(btn){ btn.disabled = false; btn.textContent = '🎟️ Confirmar reserva gratuita'; }
+    }
   },
   async pagarConBold(total){
     const btn = document.getElementById('boldPagarBtn');
@@ -3407,15 +3511,28 @@ const AdminApp = {
   catBuildState(mapa){
     mapa = mapa || {};
     const servicios = mapa.servicios || {};
+    const ocultos = mapa.ocultos || {};
+    const gratis = mapa.gratis || {};
+    const autorizacion = mapa.autorizacion || {};
     return {
-      palco: {activo: !!(servicios.palco&&servicios.palco.activo), nombre:(servicios.palco&&servicios.palco.nombre)||'', valor:Number(servicios.palco&&servicios.palco.valor)||0},
-      vip: {activo: !!(servicios.vip&&servicios.vip.activo), nombre:(servicios.vip&&servicios.vip.nombre)||'', valor:Number(servicios.vip&&servicios.vip.valor)||0},
+      palco: {
+        activo: !!(servicios.palco&&servicios.palco.activo), nombre:(servicios.palco&&servicios.palco.nombre)||'', valor:Number(servicios.palco&&servicios.palco.valor)||0,
+        oculto: !!ocultos.palco, gratis: !!gratis.palco, autorizacion: autorizacion.palco || 'automatica'
+      },
+      vip: {
+        activo: !!(servicios.vip&&servicios.vip.activo), nombre:(servicios.vip&&servicios.vip.nombre)||'', valor:Number(servicios.vip&&servicios.vip.valor)||0,
+        oculto: !!ocultos.vip, gratis: !!gratis.vip, autorizacion: autorizacion.vip || 'automatica'
+      },
+      general: {
+        oculto: !!ocultos.general, gratis: !!gratis.general, autorizacion: autorizacion.general || 'automatica'
+      },
       categorias: (mapa.categorias||[]).map(c=>({
         id:c.id, nombre:c.nombre, precio:Number(c.precio)||0, numerada:!!c.numerada, cantidad:Number(c.cantidad)||0,
         servicio:{activo:!!(c.servicio&&c.servicio.activo), nombre:(c.servicio&&c.servicio.nombre)||'', valor:Number(c.servicio&&c.servicio.valor)||0},
+        oculto: !!c.oculto, gratis: !!c.gratis, autorizacion: c.autorizacion || 'automatica',
         _persisted:true, _cantidadOriginal:Number(c.cantidad)||0
       })),
-      draft: {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0}
+      draft: {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0, oculto:false, gratis:false, autorizacion:'automatica'}
     };
   },
   toggleCategoriasPanel(key){
@@ -3443,11 +3560,20 @@ const AdminApp = {
       if(g(pfx+'palcoNombre')) st.palco.nombre = g(pfx+'palcoNombre').value;
       if(g(pfx+'palcoValor')) st.palco.valor = parseFloat(g(pfx+'palcoValor').value)||0;
     }
+    if(g(pfx+'palcoOculto')) st.palco.oculto = g(pfx+'palcoOculto').checked;
+    if(g(pfx+'palcoGratis')) st.palco.gratis = g(pfx+'palcoGratis').checked;
+    if(g(pfx+'palcoAutorizacion')) st.palco.autorizacion = g(pfx+'palcoAutorizacion').value;
     if(g(pfx+'vipActivo')){
       st.vip.activo = g(pfx+'vipActivo').checked;
       if(g(pfx+'vipNombre')) st.vip.nombre = g(pfx+'vipNombre').value;
       if(g(pfx+'vipValor')) st.vip.valor = parseFloat(g(pfx+'vipValor').value)||0;
     }
+    if(g(pfx+'vipOculto')) st.vip.oculto = g(pfx+'vipOculto').checked;
+    if(g(pfx+'vipGratis')) st.vip.gratis = g(pfx+'vipGratis').checked;
+    if(g(pfx+'vipAutorizacion')) st.vip.autorizacion = g(pfx+'vipAutorizacion').value;
+    if(g(pfx+'generalOculto')) st.general.oculto = g(pfx+'generalOculto').checked;
+    if(g(pfx+'generalGratis')) st.general.gratis = g(pfx+'generalGratis').checked;
+    if(g(pfx+'generalAutorizacion')) st.general.autorizacion = g(pfx+'generalAutorizacion').value;
     st.categorias.forEach((c,i)=>{
       const p = pfx+'c'+i+'-';
       if(g(p+'nombre')) c.nombre = g(p+'nombre').value;
@@ -3457,6 +3583,9 @@ const AdminApp = {
       if(g(p+'servActivo')) c.servicio.activo = g(p+'servActivo').checked;
       if(g(p+'servNombre')) c.servicio.nombre = g(p+'servNombre').value;
       if(g(p+'servValor')) c.servicio.valor = parseFloat(g(p+'servValor').value)||0;
+      if(g(p+'oculto')) c.oculto = g(p+'oculto').checked;
+      if(g(p+'gratis')) c.gratis = g(p+'gratis').checked;
+      if(g(p+'autorizacion')) c.autorizacion = g(p+'autorizacion').value;
     });
     const dp = pfx+'draft-';
     if(g(dp+'nombre')) st.draft.nombre = g(dp+'nombre').value;
@@ -3466,11 +3595,35 @@ const AdminApp = {
     if(g(dp+'servActivo')) st.draft.servActivo = g(dp+'servActivo').checked;
     if(g(dp+'servNombre')) st.draft.servNombre = g(dp+'servNombre').value;
     if(g(dp+'servValor')) st.draft.servValor = parseFloat(g(dp+'servValor').value)||0;
+    if(g(dp+'oculto')) st.draft.oculto = g(dp+'oculto').checked;
+    if(g(dp+'gratis')) st.draft.gratis = g(dp+'gratis').checked;
+    if(g(dp+'autorizacion')) st.draft.autorizacion = g(dp+'autorizacion').value;
   },
   catRender(key){
     const wrap = document.getElementById('catPanelBody-'+key);
     if(!wrap) return;
     wrap.innerHTML = this.catPanelHtml(key, this._catState[key]);
+  },
+  // Bloque reutilizable con las 3 opciones que pidió el admin para CUALQUIER
+  // tipo de ticket (Palco, VIP, General o una categoría personalizada):
+  // 1) Ocultar su botón de pago (no se muestra al usuario en "Comprar tickets").
+  // 2) Ticket gratis: apaga el valor sin borrar el precio guardado.
+  // 3) Si es gratis, elegir si se genera automáticamente o si cada compra
+  //    queda pendiente hasta que el admin la autorice.
+  catControlesHtml(idOculto, idGratis, idAutorizacion, obj, key){
+    return `
+        <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);">
+          <label class="chk" style="margin:4px 0;"><input type="checkbox" id="${idOculto}" ${obj.oculto?'checked':''} onchange="AdminApp.catToggle('${key}')"> Ocultar botón de pago (no aparece en "Comprar tickets")</label>
+          <label class="chk" style="margin:4px 0;"><input type="checkbox" id="${idGratis}" ${obj.gratis?'checked':''} onchange="AdminApp.catToggle('${key}')"> Ticket gratis (apaga el valor de este ticket)</label>
+          ${obj.gratis?`
+          <div class="field" style="margin-top:4px;">
+            <label>¿Cómo se entrega este ticket gratis?</label>
+            <select id="${idAutorizacion}" onchange="AdminApp.catToggle('${key}')">
+              <option value="automatica" ${obj.autorizacion==='automatica'?'selected':''}>Se genera solo (sin autorización)</option>
+              <option value="admin" ${obj.autorizacion==='admin'?'selected':''}>Requiere autorización del admin</option>
+            </select>
+          </div>`:''}
+        </div>`;
   },
   catPanelHtml(key, st){
     const pfx = 'cat-'+key+'-';
@@ -3479,7 +3632,7 @@ const AdminApp = {
       return `<div class="stat" style="margin-bottom:8px; text-align:left;">
         <div class="row">
           <div class="field" style="flex:2;"><label>Nombre categoría</label><input id="${p}nombre" value="${escapeHtml(c.nombre)}"></div>
-          <div class="field" style="flex:1;"><label>Precio</label><input id="${p}precio" type="number" min="0" value="${c.precio}"></div>
+          <div class="field" style="flex:1;"><label>Precio</label><input id="${p}precio" type="number" min="0" value="${c.precio}" ${c.gratis?'disabled':''}></div>
         </div>
         <div class="row">
           <label class="chk" style="flex:1;"><input type="checkbox" id="${p}numerada" ${c.numerada?'checked':''} onchange="AdminApp.catToggle('${key}')"> Silla numerada</label>
@@ -3490,7 +3643,8 @@ const AdminApp = {
         <label class="chk" style="margin-top:4px;"><input type="checkbox" id="${p}servActivo" ${c.servicio.activo?'checked':''} onchange="AdminApp.catToggle('${key}')"> Cobrar servicio con nombre propio a cada silla</label>
         ${c.servicio.activo?`<div class="row"><div class="field" style="flex:2;"><label>Nombre del servicio</label><input id="${p}servNombre" value="${escapeHtml(c.servicio.nombre)}" placeholder="ej: Servicio ${escapeHtml(c.nombre||'')}"></div><div class="field" style="flex:1;"><label>Valor (COP)</label><input id="${p}servValor" type="number" min="0" value="${c.servicio.valor}"></div></div>`:''}
         ` : `<p class="hint">General/sin numerar: no lleva servicio.</p>`}
-        <button class="btn btn-sm btn-danger" type="button" onclick="AdminApp.catRemoveCategoria('${key}',${i})" ${c._persisted?'disabled':''}>${c._persisted?'Ya guardada':'Quitar'}</button>
+        ${this.catControlesHtml(p+'oculto', p+'gratis', p+'autorizacion', c, key)}
+        <button class="btn btn-sm btn-danger" type="button" style="margin-top:8px;" onclick="AdminApp.catRemoveCategoria('${key}',${i})" ${c._persisted?'disabled':''}>${c._persisted?'Ya guardada':'Quitar'}</button>
       </div>`;
     }).join('') || `<p class="hint">Aún no has creado categorías personalizadas.</p>`;
 
@@ -3499,11 +3653,17 @@ const AdminApp = {
         <b>Palco</b>
         <label class="chk" style="margin:6px 0;"><input type="checkbox" id="${pfx}palcoActivo" ${st.palco.activo?'checked':''} onchange="AdminApp.catToggle('${key}')"> Cobrar servicio con nombre propio a cada silla de Palco</label>
         ${st.palco.activo?`<div class="row"><div class="field" style="flex:2;"><label>Nombre del servicio</label><input id="${pfx}palcoNombre" value="${escapeHtml(st.palco.nombre)}" placeholder="ej: Servicio Palco"></div><div class="field" style="flex:1;"><label>Valor (COP)</label><input id="${pfx}palcoValor" type="number" min="0" value="${st.palco.valor}"></div></div>`:''}
+        ${this.catControlesHtml(pfx+'palcoOculto', pfx+'palcoGratis', pfx+'palcoAutorizacion', st.palco, key)}
       </div>
       <div class="stat" style="margin-bottom:10px; text-align:left;">
         <b>VIP</b>
         <label class="chk" style="margin:6px 0;"><input type="checkbox" id="${pfx}vipActivo" ${st.vip.activo?'checked':''} onchange="AdminApp.catToggle('${key}')"> Cobrar servicio con nombre propio a cada silla VIP</label>
         ${st.vip.activo?`<div class="row"><div class="field" style="flex:2;"><label>Nombre del servicio</label><input id="${pfx}vipNombre" value="${escapeHtml(st.vip.nombre)}" placeholder="ej: Servicio VIP"></div><div class="field" style="flex:1;"><label>Valor (COP)</label><input id="${pfx}vipValor" type="number" min="0" value="${st.vip.valor}"></div></div>`:''}
+        ${this.catControlesHtml(pfx+'vipOculto', pfx+'vipGratis', pfx+'vipAutorizacion', st.vip, key)}
+      </div>
+      <div class="stat" style="margin-bottom:10px; text-align:left;">
+        <b>General</b>
+        ${this.catControlesHtml(pfx+'generalOculto', pfx+'generalGratis', pfx+'generalAutorizacion', st.general, key)}
       </div>
       <div class="section-title" style="margin-top:6px;"><h3 style="font-size:15px;">Categorías personalizadas</h3></div>
       ${catRows}
@@ -3511,7 +3671,7 @@ const AdminApp = {
         <b>+ Crear categoría</b>
         <div class="row" style="margin-top:6px;">
           <div class="field" style="flex:2;"><label>Nombre</label><input id="${pfx}draft-nombre" value="${escapeHtml(st.draft.nombre)}" placeholder="ej: Preferencial"></div>
-          <div class="field" style="flex:1;"><label>Precio</label><input id="${pfx}draft-precio" type="number" min="0" value="${st.draft.precio}"></div>
+          <div class="field" style="flex:1;"><label>Precio</label><input id="${pfx}draft-precio" type="number" min="0" value="${st.draft.precio}" ${st.draft.gratis?'disabled':''}></div>
         </div>
         <label class="chk" style="margin:6px 0;"><input type="checkbox" id="${pfx}draft-numerada" ${st.draft.numerada?'checked':''} onchange="AdminApp.catToggle('${key}')"> Es una localidad numerada (silla asignada)</label>
         <div class="field"><label>${st.draft.numerada?'Cantidad de sillas':'Cantidad de cupos'}</label><input id="${pfx}draft-cantidad" type="number" min="1" value="${st.draft.cantidad}"></div>
@@ -3519,7 +3679,8 @@ const AdminApp = {
         <label class="chk" style="margin-top:4px;"><input type="checkbox" id="${pfx}draft-servActivo" ${st.draft.servActivo?'checked':''} onchange="AdminApp.catToggle('${key}')"> Cobrar servicio con nombre propio a cada silla</label>
         ${st.draft.servActivo?`<div class="row"><div class="field" style="flex:2;"><label>Nombre del servicio</label><input id="${pfx}draft-servNombre" value="${escapeHtml(st.draft.servNombre)}" placeholder="ej: Servicio Preferencial"></div><div class="field" style="flex:1;"><label>Valor (COP)</label><input id="${pfx}draft-servValor" type="number" min="0" value="${st.draft.servValor}"></div></div>`:''}
         `:`<p class="hint">General/sin numerar: no lleva servicio.</p>`}
-        <button class="btn btn-sm" type="button" onclick="AdminApp.catAddCategoria('${key}')">+ Agregar categoría</button>
+        ${this.catControlesHtml(pfx+'draft-oculto', pfx+'draft-gratis', pfx+'draft-autorizacion', st.draft, key)}
+        <button class="btn btn-sm" type="button" style="margin-top:8px;" onclick="AdminApp.catAddCategoria('${key}')">+ Agregar categoría</button>
       </div>
       ${key!=='nuevo' ? `<button class="btn btn-primary btn-block" style="margin-top:12px;" onclick="AdminApp.guardarCategorias('${key}')">Guardar categorías y servicio</button>` : `<p class="hint" style="margin-top:10px;">Estas categorías y servicios se guardarán al crear el evento.</p>`}
     `;
@@ -3544,9 +3705,10 @@ const AdminApp = {
     st.categorias.push({
       id, nombre:d.nombre.trim(), precio:d.precio||0, numerada:d.numerada, cantidad:d.cantidad,
       servicio: d.numerada ? {activo:d.servActivo, nombre:d.servNombre||'', valor:d.servValor||0} : {activo:false,nombre:'',valor:0},
+      oculto:!!d.oculto, gratis:!!d.gratis, autorizacion:d.autorizacion||'automatica',
       _persisted:false, _cantidadOriginal:0
     });
-    st.draft = {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0};
+    st.draft = {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0, oculto:false, gratis:false, autorizacion:'automatica'};
     this.catRender(key);
     if(key!=='nuevo'){
       await this.guardarCategorias(key);
@@ -3580,13 +3742,17 @@ const AdminApp = {
     }
     const categorias = st.categorias.map(c=>({
       id:c.id, nombre:c.nombre.trim(), precio:c.precio, numerada:c.numerada, cantidad:c.cantidad,
-      servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0}
+      servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0},
+      oculto:!!c.oculto, gratis:!!c.gratis, autorizacion:c.autorizacion||'automatica'
     }));
     const servicios = {
       palco: {activo:st.palco.activo, nombre:st.palco.nombre, valor:st.palco.valor},
       vip: {activo:st.vip.activo, nombre:st.vip.nombre, valor:st.vip.valor}
     };
-    const nuevoMapa = {...(evento.mapa||{}), servicios, categorias};
+    const ocultos = {palco:!!st.palco.oculto, vip:!!st.vip.oculto, general:!!st.general.oculto};
+    const gratis = {palco:!!st.palco.gratis, vip:!!st.vip.gratis, general:!!st.general.gratis};
+    const autorizacion = {palco:st.palco.autorizacion||'automatica', vip:st.vip.autorizacion||'automatica', general:st.general.autorizacion||'automatica'};
+    const nuevoMapa = {...(evento.mapa||{}), servicios, categorias, ocultos, gratis, autorizacion};
     const {error} = await sb.from('eventos').update({mapa: nuevoMapa}).eq('id', eventId);
     if(error){ toast('Error guardando categorías: '+error.message, true); console.error(error); return; }
     evento.mapa = nuevoMapa;
@@ -3677,13 +3843,20 @@ const AdminApp = {
     }
     const categorias = catSt.categorias.map(c=>({
       id:c.id, nombre:c.nombre.trim(), precio:c.precio, numerada:c.numerada, cantidad:c.cantidad,
-      servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0}
+      servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0},
+      oculto:!!c.oculto, gratis:!!c.gratis, autorizacion:c.autorizacion||'automatica'
     }));
     const servicios = {
       palco: {activo:catSt.palco.activo, nombre:catSt.palco.nombre, valor:catSt.palco.valor},
       vip: {activo:catSt.vip.activo, nombre:catSt.vip.nombre, valor:catSt.vip.valor}
     };
-    const mapa = {palcos, sillasPalco, vip, general, precios, servicios, categorias};
+    const ocultos = {palco:!!catSt.palco.oculto, vip:!!catSt.vip.oculto, general:!!catSt.general.oculto};
+    const gratisMapa = {palco:!!catSt.palco.gratis, vip:!!catSt.vip.gratis, general:!!catSt.general.gratis};
+    const autorizacionMapa = {palco:catSt.palco.autorizacion||'automatica', vip:catSt.vip.autorizacion||'automatica', general:catSt.general.autorizacion||'automatica'};
+    // Los tickets solo se crean con los datos que el admin dejó en el
+    // formulario (nombre, precio, cantidad, servicio, oculto/gratis/autorización);
+    // nada se agrega por fuera de lo que aquí se capturó.
+    const mapa = {palcos, sillasPalco, vip, general, precios, servicios, categorias, ocultos, gratis:gratisMapa, autorizacion:autorizacionMapa};
     let imagen_url = null;
     const imgFile = document.getElementById('evImagen').files[0];
     if(imgFile){
