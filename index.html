@@ -911,7 +911,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
     <!-- ============ LOGIN: QR ============ -->
     <section id="view-login-qr" class="hide">
       <div class="auth-shell">
-        <span class="back" onclick="Router.go('landing')">‹ volver</span>
+        <span class="back" onclick="Router.go(Auth.role==='admin'?'admin':'landing')">‹ volver</span>
         <div class="card">
           <div class="section-title"><h2>Control de acceso</h2></div>
           <div class="field"><label>Usuario</label><select id="qrUser"></select></div>
@@ -924,7 +924,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
     <!-- ============ LOGIN: VT ============ -->
     <section id="view-login-vt" class="hide">
       <div class="auth-shell">
-        <span class="back" onclick="Router.go('landing')">‹ volver</span>
+        <span class="back" onclick="Router.go(Auth.role==='admin'?'admin':'landing')">‹ volver</span>
         <div class="card">
           <div class="section-title"><h2>Punto de venta</h2></div>
           <div class="field"><label>Usuario</label><select id="vtUser"></select></div>
@@ -979,6 +979,12 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="a-patro" onclick="AdminApp.tab('a-patro')">Patrocinadores</div>
         <div class="pill-tab" data-tab="a-compras" onclick="AdminApp.tab('a-compras')">Solicitudes de compra</div>
         <div class="pill-tab" data-tab="a-chat" onclick="AdminApp.tab('a-chat')">Chat</div>
+      </div>
+      <div class="tabs" style="margin-top:-4px; margin-bottom:14px;">
+        <span class="hint" style="align-self:center; margin-right:4px;">Vista rápida de otras interfaces:</span>
+        <div class="pill-tab" onclick="AdminApp.abrirInterfaz('qr')">🔎 Control de acceso</div>
+        <div class="pill-tab" onclick="AdminApp.abrirInterfaz('vt')">🧾 Vendedor</div>
+        <div class="pill-tab" onclick="AdminApp.abrirInterfaz('comprar')">🎟️ Comprar tickets</div>
       </div>
       <div id="a-eventos" class="tab-pane"></div>
       <div id="a-tickets" class="tab-pane hide"></div>
@@ -1856,6 +1862,20 @@ const Auth = {
         VTApp.tab('v-vender');
         return true;
       }
+      // Cliente: antes no se restauraba, así que refrescar la página después
+      // de comprar (o al volver más tarde) mandaba a la persona de regreso al
+      // inicio y parecía que sus tickets se habían perdido.
+      if(saved.role === 'usuario' && saved.identity){
+        const correo = saved.identity.email || saved.identity.value || '';
+        if(correo){
+          UsuarioApp.compra = {evento:null, asientos:[], seleccion:{}, comprador:{nombre:saved.identity.nombre||'', cedula:'', correo, telefono:''}, sala:'admin_usuario_'+correo};
+          this.setRole('usuario', saved.identity, saved.label||'Cliente');
+          await UsuarioApp.refreshTickets();
+          Router.go('usuario');
+          UsuarioApp.tab('u-tickets');
+          return true;
+        }
+      }
     }catch(e){
       console.warn('No se pudo restaurar la sesión guardada', e);
       try{ localStorage.removeItem(AUTH_STORAGE_KEY); }catch(_){}
@@ -2128,6 +2148,18 @@ const MapView = {
     if(tt) tt.style.display = 'none';
   },
 
+  // Cambia de pestaña de piso en el mapa (solo eventos con más de 1 piso) y
+  // vuelve a dibujar el mismo contenedor con los mismos parámetros de la
+  // última vez que se llamó a render().
+  switchPiso(n){
+    this._ultimoPiso = n;
+    const last = this._lastRender;
+    if(!last) return;
+    const el = document.getElementById(last.containerId);
+    if(!el) return;
+    this.render(el, last.eventoId, last.myTicket, {...(last.opts||{}), piso:n});
+  },
+
   async render(container, eventoId, myTicket, opts){
     opts = opts || {};
     const editable = !!opts.editable;
@@ -2165,48 +2197,67 @@ const MapView = {
 
     // ---- build zone definitions (key, label, cols, rows, seat list) ----
     // Cada zona guarda además "baseLabel" (el nombre editable, sin el conteo de
-    // ocupación) para poder ofrecer el botón de renombrar en modo editor.
-    const zones = [];
+    // ocupación) para poder ofrecer el botón de renombrar en modo editor, y
+    // "piso" para poder filtrar por pestaña de piso cuando el evento tiene más
+    // de un nivel. Las zonas fijas (palco/VIP/general) viven siempre en el
+    // piso 1; las ubicaciones personalizadas usan el piso que eligió el admin.
+    // Además, una zona SOLO se agrega al mapa si tiene al menos un puesto real
+    // ya creado (total>0): así no aparecen ubicaciones "fantasma" que nunca
+    // fueron creadas explícitamente por el admin.
+    let zones = [];
     palcoKeys.forEach(p=>{
       const seats = palcos[p].sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
       const zkey = 'P_'+p;
       const base = nombresMap[zkey] || p;
-      zones.push({key:zkey, label:base, baseLabel:base, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'palco'});
+      zones.push({key:zkey, label:base, baseLabel:base, cols:4, rows:Math.ceil(seats.length/4)||1, seats, kind:'palco', piso:1});
     });
-    {
+    if(vipTotal>0){
       const base = nombresMap['VIP'] || 'Zona VIP';
       zones.push({
         key:'VIP', label:`${base.toUpperCase()} (${vipTaken}/${vipTotal})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(vipTotal/10)),
-        seats:vipSeats, kind:'vip', empty: vipTotal===0
+        seats:vipSeats, kind:'vip', piso:1
       });
     }
     const generalSeats = Array.from({length:Math.min(generalTotal,120)}).map((_,i)=> asientos.find(a=>a.zona==='general' && a.numero===`G${i+1}`)).filter(Boolean);
-    {
+    if(generalTotal>0){
       const base = nombresMap['GENERAL'] || 'General';
       zones.push({
         key:'GENERAL', label:`${base.toUpperCase()} (${generalTaken}/${generalTotal})`, baseLabel:base, cols:12, rows:Math.max(1,Math.ceil(generalSeats.length/12)),
-        seats:generalSeats, kind:'general', empty: generalTotal===0
+        seats:generalSeats, kind:'general', piso:1
       });
     }
     // Categorías personalizadas: numeradas se dibujan como grilla individual (tipo VIP);
-    // no numeradas como zona agrupada (tipo General).
+    // no numeradas como zona agrupada (tipo General). Solo se muestran las que
+    // ya tienen puestos creados (total>0) — una categoría guardada con 0
+    // cupos todavía no es una ubicación real en el mapa.
     const categoriasPersonalizadas = mapa.categorias || [];
     const customZoneKeys = [];
     categoriasPersonalizadas.forEach(c=>{
       const seatsCat = asientos.filter(a=>a.zona===c.id);
       const taken = seatsCat.filter(a=>a.ocupado).length;
       const total = seatsCat.length;
+      if(total===0) return;
       const zkey = 'CAT_'+c.id;
       customZoneKeys.push(zkey);
       const base = nombresMap[zkey] || c.nombre || 'Categoría';
+      const piso = Number(c.piso)||1;
       if(c.numerada){
         const sorted = seatsCat.slice().sort((a,b)=>a.numero.localeCompare(b.numero, undefined, {numeric:true}));
-        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(total/10)), seats:sorted, kind:'custom', customLabel:base, empty: total===0});
+        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:10, rows:Math.max(1,Math.ceil(total/10)), seats:sorted, kind:'custom', customLabel:base, piso});
       } else {
         const pooled = seatsCat.slice(0, Math.min(total,120));
-        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:12, rows:Math.max(1,Math.ceil(pooled.length/12)), seats:pooled, kind:'custom', customLabel:base, empty: total===0});
+        zones.push({key:zkey, label:`${base.toUpperCase()} (${taken}/${total})`, baseLabel:base, cols:12, rows:Math.max(1,Math.ceil(pooled.length/12)), seats:pooled, kind:'custom', customLabel:base, piso});
       }
     });
+
+    // ---- pisos: si el evento tiene más de un nivel, se filtra el mapa a un
+    // piso a la vez (con pestañas), guardando cuál piso quedó seleccionado
+    // para poder redibujar al cambiar de pestaña. ----
+    const totalPisos = Math.max(1, parseInt(mapa.pisos,10)||1);
+    let pisoActual = Math.min(totalPisos, Math.max(1, opts.piso || this._ultimoPiso || 1));
+    this._ultimoPiso = pisoActual;
+    this._lastRender = {containerId: container.id, eventoId, myTicket, opts};
+    if(totalPisos>1) zones = zones.filter(z=>(z.piso||1)===pisoActual);
 
     // ---- sizes & default packed positions ----
     const stageW = 220, stageH = 32;
@@ -2313,6 +2364,7 @@ const MapView = {
         <p class="hint">${editable ? 'Editor de mapa' : 'Mapa del evento'}</p>
         ${editable ? `<div style="display:flex; gap:8px;"><button class="btn btn-sm" id="mapResetBtn">Restablecer orden</button></div>` : ''}
       </div>
+      ${totalPisos>1 ? `<div class="map-piso-tabs" style="display:flex; gap:6px; flex-wrap:wrap; max-width:640px; margin:0 auto 10px;">${Array.from({length:totalPisos}).map((_,i)=>{const n=i+1; return `<button type="button" class="btn btn-sm ${n===pisoActual?'btn-primary':''}" onclick="MapView.switchPiso(${n})">Piso ${n}</button>`;}).join('')}</div>` : ''}
       ${editable ? `
       <div class="map-fondo-toolbar" id="mapFondoToolbar">
         <label class="mf-upload">🖼️ ${fondo ? 'Cambiar imagen del plano' : 'Subir imagen del plano'}<input type="file" id="mapFondoFile" accept="image/*"></label>
@@ -2906,8 +2958,7 @@ const UsuarioApp = {
     document.querySelectorAll('#view-usuario .tab-pane').forEach(p=>p.classList.add('hide'));
     document.getElementById(name).classList.remove('hide');
     if(name==='u-chat'){
-      const sala = 'admin_usuario_'+(this.identity ? this.identity.value : '');
-      this.sala = 'admin_usuario_' + document.getElementById('userLookup').value.trim();
+      this.sala = 'admin_usuario_' + this.currentLookup();
       ChatKit.load(this.sala, document.getElementById('uChatMsgs'), 'usuario');
       ChatKit.subscribe(this.sala, document.getElementById('uChatMsgs'), 'usuario');
     }
@@ -2922,18 +2973,46 @@ const UsuarioApp = {
     if(name==='u-comprar') this.renderComprar();
     if(name==='u-transferir') this.renderTransferir();
     // Mantiene "Mis tickets" actualizado en tiempo real (por ejemplo si el
-    // administrador aprueba una compra pendiente mientras la persona espera).
-    if(name==='u-tickets') AutoRefresh.start('usuario-tickets', ()=>this.refreshTickets(), 15000);
-    else AutoRefresh.stop('usuario-tickets');
+    // administrador aprueba una compra pendiente mientras la persona espera,
+    // o si la persona acaba de completar una compra). Se refresca de
+    // inmediato al entrar (antes solo arrancaba un temporizador de 15s y la
+    // primera vez tardaba en mostrar los tickets recién comprados).
+    if(name==='u-tickets'){
+      this.refreshTickets();
+      AutoRefresh.start('usuario-tickets', ()=>this.refreshTickets(), 15000);
+    } else AutoRefresh.stop('usuario-tickets');
   },
   // Vuelve a consultar los tickets del usuario sin interrumpir lo que esté
   // haciendo (no muestra errores ni cambia de pestaña).
+  // Identidad del cliente actual para volver a consultar sus tickets: usa
+  // los datos del comprador ya registrados en esta sesión de compra (el
+  // campo "userLookup" ya no existe en el HTML actual, así que ya no se usa
+  // como única fuente — antes esto hacía que el refresco fallara siempre en
+  // silencio y las compras nunca se reflejaran en "Mis tickets").
+  currentLookup(){
+    const legacy = document.getElementById('userLookup');
+    if(legacy && legacy.value.trim()) return legacy.value.trim();
+    if(this.compra && this.compra.comprador){
+      return this.compra.comprador.correo || this.compra.comprador.cedula || '';
+    }
+    if(Auth.identity) return Auth.identity.email || Auth.identity.value || '';
+    return '';
+  },
   async refreshTickets(){
-    const val = document.getElementById('userLookup') ? document.getElementById('userLookup').value.trim() : '';
-    if(!val) return;
-    const {data, error} = await sb.from('tickets').select('*').or(`correo.eq.${val},cedula.eq.${val}`).order('created_at',{ascending:true});
-    if(error || !data || !data.length) return;
-    this.tickets = data;
+    const correo = (this.compra && this.compra.comprador && this.compra.comprador.correo) || '';
+    const cedula = (this.compra && this.compra.comprador && this.compra.comprador.cedula) || '';
+    const val = this.currentLookup();
+    if(!correo && !cedula && !val) return;
+    let query = sb.from('tickets').select('*');
+    if(correo || cedula){
+      const partes = [correo?`correo.eq.${correo}`:null, cedula?`cedula.eq.${cedula}`:null].filter(Boolean);
+      query = query.or(partes.join(','));
+    } else {
+      query = query.or(`correo.eq.${val},cedula.eq.${val}`);
+    }
+    const {data, error} = await query.order('created_at',{ascending:true});
+    if(error) return;
+    this.tickets = data || [];
     if(Router.current==='usuario') this.renderTickets();
   },
   /* ---------- Transferencia P2P de tickets (código de 4 dígitos) ---------- */
@@ -3028,13 +3107,16 @@ const UsuarioApp = {
       transfer_code: null, transfer_code_expires: null
     }).eq('id', id);
     if(error){ toast('Error completando la transferencia: '+error.message, true); return; }
-    toast('¡Ticket transferido a tu nombre! Cargando tu nuevo QR…');
-    document.getElementById('userLookup').value = correo || cedula;
-    await this.login();
+    toast('¡Ticket transferido a tu nombre! Cargando tu nuevo ticket…');
+    this.compra = this.compra || {evento:null, asientos:[], seleccion:{}, comprador:null, sala:null};
+    this.compra.comprador = {nombre, cedula, correo, telefono};
+    Auth.setRole('usuario', {email:correo, value:correo||cedula}, 'Cliente');
+    await this.refreshTickets();
+    this.tab('u-tickets');
   },
   sendChat(){
     const input = document.getElementById('uChatInput');
-    ChatKit.send(this.sala, document.getElementById('userLookup').value.trim(), 'usuario', input.value);
+    ChatKit.send(this.sala, this.currentLookup(), 'usuario', input.value);
     input.value='';
   },
 
@@ -3323,7 +3405,10 @@ const UsuarioApp = {
         const {data: created, error} = await sb.from('tickets').insert(rows).select();
         if(error){ toast('No se pudieron generar los tickets: '+error.message, true); if(btn){ btn.disabled=false; btn.textContent='🎟️ Confirmar reserva gratuita'; } return; }
         await Promise.all(itemsPayload.map((it,i)=> sb.from('asientos').update({ticket_id: created[i].id, ocupado:true}).eq('id', it.asiento_id)));
-        toast('¡Listo! Ya puedes ver tu(s) ticket(s) en "Mis entradas".');
+        // Refresca de inmediato "Mis tickets" para que la compra recién hecha
+        // quede visible sin que la persona tenga que volver a iniciar sesión.
+        await this.refreshTickets();
+        toast('¡Listo! Ya puedes ver tu(s) ticket(s) en "Mis tickets".');
       }
       const modal = document.getElementById('pagoModal');
       if(modal) modal.remove();
@@ -3485,6 +3570,15 @@ const AdminApp = {
     await this.loadEventos();
     this.tab('a-eventos');
     this.iniciarMonitorCompras();
+  },
+  // Acceso rápido desde el dashboard del admin a las demás interfaces
+  // (control de acceso, vendedor, comprar tickets) sin tener que salir y
+  // volver a entrar por la pantalla de inicio. El admin sigue necesitando
+  // ingresar el usuario/clave de QR o VT, ya que son sesiones separadas.
+  abrirInterfaz(cual){
+    if(cual==='qr') Router.go('login-qr');
+    else if(cual==='vt') Router.go('login-vt');
+    else if(cual==='comprar') UsuarioApp.goComprar();
   },
   /* ---------- Alerta de solicitudes de compra pendientes ---------- */
   iniciarMonitorCompras(){
@@ -3817,28 +3911,33 @@ const AdminApp = {
             <div class="field" style="flex:1;"><label>Fecha</label><input id="evFecha" type="date"></div>
             <div class="field" style="flex:1;"><label>Hora</label><input id="evHora" type="time"></div>
           </div>
+          <div class="field">
+            <label>¿Cuántos pisos tiene el evento?</label>
+            <select id="evPisos">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===1?'selected':''}>${n===1?'1 (un solo nivel)':n+' pisos'}</option>`).join('')}</select>
+            <p class="hint" style="margin-top:4px;">Si el evento tiene más de un piso, luego podrás crear ubicaciones en cada piso desde "Crear ubicación" y elegir en cuál va cada una. En "Mapa del evento" aparecerá una pestaña por piso.</p>
+          </div>
           <div class="row">
             <div class="field" style="flex:1;">
               <label>Cantidad de palcos</label>
-              <select id="evPalcos">${[0,1,2,3,4,5,6,7,8,9,10,12,14,16,18,20].map(n=>`<option value="${n}" ${n===8?'selected':''}>${n===0?'0 (ninguno)':n+' palco'+(n>1?'s':'')}</option>`).join('')}</select>
+              <select id="evPalcos">${[0,1,2,3,4,5,6,7,8,9,10,12,14,16,18,20].map(n=>`<option value="${n}" ${n===0?'selected':''}>${n===0?'0 (ninguno)':n+' palco'+(n>1?'s':'')}</option>`).join('')}</select>
             </div>
             <div class="field" style="flex:1;">
               <label>Sillas por palco</label>
               <input id="evSillasPalco" type="number" min="1" value="8" placeholder="8">
             </div>
           </div>
-          <p class="hint" style="margin-top:-8px;">Escribe cuántas sillas numeradas quieres en cada palco; se enumerarán automáticamente (S1, S2, S3...).</p>
+          <p class="hint" style="margin-top:-8px;">Escribe cuántas sillas numeradas quieres en cada palco; se enumerarán automáticamente (S1, S2, S3...). Deja "Cantidad de palcos" en 0 si el evento no tendrá palcos: así no se crea ninguna ubicación de palco por defecto.</p>
           <div class="row">
             <div class="field" style="flex:1;">
               <label>Puestos VIP</label>
-              <select id="evVip">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===30?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
+              <select id="evVip">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===0?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
             </div>
           </div>
           <div class="field">
             <label>Cupos zona General</label>
-            <select id="evGeneral">${[0,20,50,80,120,150,200,300,400,500].map(n=>`<option value="${n}" ${n===120?'selected':''}>${n===0?'0 (ninguna)':n+' cupos'}</option>`).join('')}</select>
+            <select id="evGeneral">${[0,20,50,80,120,150,200,300,400,500].map(n=>`<option value="${n}" ${n===0?'selected':''}>${n===0?'0 (ninguna)':n+' cupos'}</option>`).join('')}</select>
           </div>
-          <p class="hint">Podrás aumentar estas cantidades luego desde "Tus eventos" y se reflejarán en el mapa del evento. Deja una zona en "0 / ninguno" si el evento no la tendrá; así no aparecerá como ubicación disponible.</p>
+          <p class="hint">Estas cantidades empiezan en "0 / ninguno" a propósito: nada se crea en el mapa hasta que tú elijas una cantidad y guardes. Podrás aumentarlas luego desde "Tus eventos" y se reflejarán en el mapa del evento.</p>
           <div class="row">
             <div class="field" style="flex:1;"><label>Precio Palco (por silla)</label><input id="evPrecioPalco" type="number" min="0" placeholder="0"></div>
             <div class="field" style="flex:1;"><label>Precio VIP</label><input id="evPrecioVip" type="number" min="0" placeholder="0"></div>
@@ -3878,6 +3977,11 @@ const AdminApp = {
           <button class="btn btn-sm" onclick="AdminApp.configurarPago('${e.id}')">Config. de pago</button>
         </div>
         <div id="mapaEdit-${e.id}" class="hide" style="margin-top:10px; border-top:1px dashed var(--line); padding-top:10px;">
+          <div class="field">
+            <label>¿Cuántos pisos tiene el evento?</label>
+            <select id="mapaEditPisos-${e.id}">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===((e.mapa&&Number(e.mapa.pisos))||1)?'selected':''}>${n===1?'1 (un solo nivel)':n+' pisos'}</option>`).join('')}</select>
+            <p class="hint" style="margin-top:4px;">Al crear una ubicación luego podrás elegir en cuál piso va. En "Mapa del evento" aparecerá una pestaña por piso.</p>
+          </div>
           <div class="row">
             <div class="field" style="flex:1;">
               <label>Cantidad de palcos</label>
@@ -3891,11 +3995,11 @@ const AdminApp = {
           <div class="row">
             <div class="field" style="flex:1;">
               <label>Puestos VIP</label>
-              <select id="mapaEditVip-${e.id}">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.vip)!==undefined?(e.mapa&&e.mapa.vip):30)?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
+              <select id="mapaEditVip-${e.id}">${[0,10,20,30,40,50,60,80,100,150,200].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.vip)||0)?'selected':''}>${n===0?'0 (ninguno)':n+' puestos'}</option>`).join('')}</select>
             </div>
             <div class="field" style="flex:1;">
               <label>Cupos General</label>
-              <select id="mapaEditGeneral-${e.id}">${[0,20,50,80,120,150,200,300,400,500].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.general)!==undefined?(e.mapa&&e.mapa.general):120)?'selected':''}>${n===0?'0 (ninguna)':n+' cupos'}</option>`).join('')}</select>
+              <select id="mapaEditGeneral-${e.id}">${[0,20,50,80,120,150,200,300,400,500].map(n=>`<option value="${n}" ${n===((e.mapa&&e.mapa.general)||0)?'selected':''}>${n===0?'0 (ninguna)':n+' cupos'}</option>`).join('')}</select>
             </div>
           </div>
           <button class="btn btn-primary btn-sm btn-block" onclick="AdminApp.guardarMapa('${e.id}')">Guardar y actualizar mapa</button>
@@ -3940,11 +4044,22 @@ const AdminApp = {
       categorias: (mapa.categorias||[]).map(c=>({
         id:c.id, nombre:c.nombre, precio:Number(c.precio)||0, numerada:!!c.numerada, cantidad:Number(c.cantidad)||0,
         servicio:{activo:!!(c.servicio&&c.servicio.activo), nombre:(c.servicio&&c.servicio.nombre)||'', valor:Number(c.servicio&&c.servicio.valor)||0},
-        oculto: !!c.oculto, gratis: !!c.gratis, autorizacion: c.autorizacion || 'automatica',
+        oculto: !!c.oculto, gratis: !!c.gratis, autorizacion: c.autorizacion || 'automatica', piso: Number(c.piso)||1,
         _persisted:true, _cantidadOriginal:Number(c.cantidad)||0
       })),
-      draft: {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0, oculto:false, gratis:false, autorizacion:'automatica'}
+      draft: {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0, oculto:false, gratis:false, autorizacion:'automatica', piso:1}
     };
+  },
+  // Piso(s) configurados para el evento (o para el formulario de "nuevo
+  // evento" mientras se está creando), usado para saber si hay que mostrar
+  // el selector de piso al crear/editar una ubicación.
+  catPisosDe(key){
+    if(key==='nuevo'){
+      const el = document.getElementById('evPisos');
+      return el ? (parseInt(el.value,10)||1) : 1;
+    }
+    const ev = this.eventos.find(e=>e.id===key);
+    return (ev && ev.mapa && Number(ev.mapa.pisos)) || 1;
   },
   toggleCategoriasPanel(key){
     const wrap = document.getElementById('catPanel-'+key);
@@ -3997,6 +4112,7 @@ const AdminApp = {
       if(g(p+'oculto')) c.oculto = g(p+'oculto').checked;
       if(g(p+'gratis')) c.gratis = g(p+'gratis').checked;
       if(g(p+'autorizacion')) c.autorizacion = g(p+'autorizacion').value;
+      if(g(p+'piso')) c.piso = parseInt(g(p+'piso').value,10)||1;
     });
     const dp = pfx+'draft-';
     if(g(dp+'nombre')) st.draft.nombre = g(dp+'nombre').value;
@@ -4009,11 +4125,12 @@ const AdminApp = {
     if(g(dp+'oculto')) st.draft.oculto = g(dp+'oculto').checked;
     if(g(dp+'gratis')) st.draft.gratis = g(dp+'gratis').checked;
     if(g(dp+'autorizacion')) st.draft.autorizacion = g(dp+'autorizacion').value;
+    if(g(dp+'piso')) st.draft.piso = parseInt(g(dp+'piso').value,10)||1;
   },
   catRender(key){
     const wrap = document.getElementById('catPanelBody-'+key);
     if(!wrap) return;
-    wrap.innerHTML = this.catPanelHtml(key, this._catState[key]);
+    wrap.innerHTML = this.catPanelHtml(key, this._catState[key], this.catPisosDe(key));
   },
   // Bloque reutilizable con las 3 opciones que pidió el admin para CUALQUIER
   // tipo de ticket (Palco, VIP, General o una categoría personalizada):
@@ -4036,7 +4153,9 @@ const AdminApp = {
           </div>`:''}
         </div>`;
   },
-  catPanelHtml(key, st){
+  catPanelHtml(key, st, pisos){
+    pisos = pisos || 1;
+    const pisoSelect = (id, valor)=> pisos>1 ? `<div class="field" style="flex:1;"><label>Piso</label><select id="${id}" onchange="AdminApp.catToggle('${key}')">${Array.from({length:pisos}).map((_,i)=>{const n=i+1; return `<option value="${n}" ${Number(valor)===n?'selected':''}>Piso ${n}</option>`;}).join('')}</select></div>` : '';
     const pfx = 'cat-'+key+'-';
     const catRows = st.categorias.map((c,i)=>{
       const p = pfx+'c'+i+'-';
@@ -4044,6 +4163,7 @@ const AdminApp = {
         <div class="row">
           <div class="field" style="flex:2;"><label>Nombre categoría</label><input id="${p}nombre" value="${escapeHtml(c.nombre)}"></div>
           <div class="field" style="flex:1;"><label>Precio</label><input id="${p}precio" type="number" min="0" value="${c.precio}" ${c.gratis?'disabled':''}></div>
+          ${pisoSelect(p+'piso', c.piso||1)}
         </div>
         <div class="row">
           <label class="chk" style="flex:1;"><input type="checkbox" id="${p}numerada" ${c.numerada?'checked':''} onchange="AdminApp.catToggle('${key}')"> Silla numerada</label>
@@ -4083,6 +4203,7 @@ const AdminApp = {
         <div class="row" style="margin-top:6px;">
           <div class="field" style="flex:2;"><label>Nombre</label><input id="${pfx}draft-nombre" value="${escapeHtml(st.draft.nombre)}" placeholder="ej: Preferencial"></div>
           <div class="field" style="flex:1;"><label>Precio</label><input id="${pfx}draft-precio" type="number" min="0" value="${st.draft.precio}" ${st.draft.gratis?'disabled':''}></div>
+          ${pisoSelect(pfx+'draft-piso', st.draft.piso||1)}
         </div>
         <label class="chk" style="margin:6px 0;"><input type="checkbox" id="${pfx}draft-numerada" ${st.draft.numerada?'checked':''} onchange="AdminApp.catToggle('${key}')"> Es una localidad numerada (silla asignada)</label>
         <div class="field"><label>${st.draft.numerada?'Cantidad de sillas':'Cantidad de cupos'}</label><input id="${pfx}draft-cantidad" type="number" min="1" value="${st.draft.cantidad}"></div>
@@ -4116,10 +4237,10 @@ const AdminApp = {
     st.categorias.push({
       id, nombre:d.nombre.trim(), precio:d.precio||0, numerada:d.numerada, cantidad:d.cantidad,
       servicio: d.numerada ? {activo:d.servActivo, nombre:d.servNombre||'', valor:d.servValor||0} : {activo:false,nombre:'',valor:0},
-      oculto:!!d.oculto, gratis:!!d.gratis, autorizacion:d.autorizacion||'automatica',
+      oculto:!!d.oculto, gratis:!!d.gratis, autorizacion:d.autorizacion||'automatica', piso:Number(d.piso)||1,
       _persisted:false, _cantidadOriginal:0
     });
-    st.draft = {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0, oculto:false, gratis:false, autorizacion:'automatica'};
+    st.draft = {nombre:'', precio:0, numerada:true, cantidad:10, servActivo:false, servNombre:'', servValor:0, oculto:false, gratis:false, autorizacion:'automatica', piso:1};
     this.catRender(key);
     if(key!=='nuevo'){
       await this.guardarCategorias(key);
@@ -4154,7 +4275,7 @@ const AdminApp = {
     const categorias = st.categorias.map(c=>({
       id:c.id, nombre:c.nombre.trim(), precio:c.precio, numerada:c.numerada, cantidad:c.cantidad,
       servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0},
-      oculto:!!c.oculto, gratis:!!c.gratis, autorizacion:c.autorizacion||'automatica'
+      oculto:!!c.oculto, gratis:!!c.gratis, autorizacion:c.autorizacion||'automatica', piso:Number(c.piso)||1
     }));
     const servicios = {
       palco: {activo:st.palco.activo, nombre:st.palco.nombre, valor:st.palco.valor},
@@ -4182,6 +4303,8 @@ const AdminApp = {
   async guardarMapa(id){
     const evento = this.eventos.find(e=>e.id===id);
     if(!evento) return;
+    const pisosEl = document.getElementById('mapaEditPisos-'+id);
+    const pisos = pisosEl ? (parseInt(pisosEl.value, 10) || 1) : ((evento.mapa && Number(evento.mapa.pisos)) || 1);
     const palcos = parseInt(document.getElementById('mapaEditPalcos-'+id).value, 10);
     const vip = parseInt(document.getElementById('mapaEditVip-'+id).value, 10);
     const general = parseInt(document.getElementById('mapaEditGeneral-'+id).value, 10);
@@ -4197,7 +4320,7 @@ const AdminApp = {
       toast('No puedes reducir la cantidad de sillas por palco, solo aumentarla', true);
       return;
     }
-    let nuevoMapa = {...mapaActual, palcos, sillasPalco, vip, general};
+    let nuevoMapa = {...mapaActual, pisos, palcos, sillasPalco, vip, general};
 
     // Si el admin abrió el sub-panel de "Categorías y servicio por silla",
     // sincroniza y valida esos datos también, y los incluye en el mismo guardado.
@@ -4213,7 +4336,8 @@ const AdminApp = {
       }
       const categorias = st.categorias.map(c=>({
         id:c.id, nombre:c.nombre.trim(), precio:c.precio, numerada:c.numerada, cantidad:c.cantidad,
-        servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0}
+        servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0},
+        oculto:!!c.oculto, gratis:!!c.gratis, autorizacion:c.autorizacion||'automatica', piso:Number(c.piso)||1
       }));
       const servicios = {
         palco: {activo:st.palco.activo, nombre:st.palco.nombre, valor:st.palco.valor},
@@ -4235,6 +4359,7 @@ const AdminApp = {
     const nombre = document.getElementById('evNombre').value.trim();
     const fecha = document.getElementById('evFecha').value || null;
     const hora = document.getElementById('evHora').value || null;
+    const pisos = parseInt(document.getElementById('evPisos').value, 10) || 1;
     const palcos = parseInt(document.getElementById('evPalcos').value, 10) || 0;
     const sillasPalco = parseInt(document.getElementById('evSillasPalco').value, 10) || 8;
     const vip = parseInt(document.getElementById('evVip').value, 10) || 0;
@@ -4255,7 +4380,7 @@ const AdminApp = {
     const categorias = catSt.categorias.map(c=>({
       id:c.id, nombre:c.nombre.trim(), precio:c.precio, numerada:c.numerada, cantidad:c.cantidad,
       servicio: c.numerada ? c.servicio : {activo:false,nombre:'',valor:0},
-      oculto:!!c.oculto, gratis:!!c.gratis, autorizacion:c.autorizacion||'automatica'
+      oculto:!!c.oculto, gratis:!!c.gratis, autorizacion:c.autorizacion||'automatica', piso:Number(c.piso)||1
     }));
     const servicios = {
       palco: {activo:catSt.palco.activo, nombre:catSt.palco.nombre, valor:catSt.palco.valor},
@@ -4267,7 +4392,7 @@ const AdminApp = {
     // Los tickets solo se crean con los datos que el admin dejó en el
     // formulario (nombre, precio, cantidad, servicio, oculto/gratis/autorización);
     // nada se agrega por fuera de lo que aquí se capturó.
-    const mapa = {palcos, sillasPalco, vip, general, precios, servicios, categorias, ocultos, gratis:gratisMapa, autorizacion:autorizacionMapa};
+    const mapa = {pisos, palcos, sillasPalco, vip, general, precios, servicios, categorias, ocultos, gratis:gratisMapa, autorizacion:autorizacionMapa};
     let imagen_url = null;
     const imgFile = document.getElementById('evImagen').files[0];
     if(imgFile){
@@ -5659,10 +5784,33 @@ async function checkBoldReturn(){
     await new Promise(r=>setTimeout(r, 2500));
   }
 
+  // El regreso desde Bold recarga la página por completo, así que se pierde
+  // el estado en memoria de UsuarioApp. Si el pago quedó aprobado y ya hay
+  // tickets, recuperamos los datos del comprador desde la solicitud y
+  // dejamos a la persona ya "ingresada" en Mis tickets, en vez de pedirle
+  // que vuelva a iniciar sesión manualmente.
+  if(estado==='aprobada' && ticketsEncontrados>0 && solicitudId){
+    try{
+      const {data: solRows} = await sb.from('solicitudes_compra').select('*').eq('id', solicitudId).limit(1);
+      const sol = solRows && solRows[0];
+      if(sol && sol.correo){
+        UsuarioApp.compra = {
+          evento: null, asientos:[], seleccion:{},
+          comprador:{nombre:sol.nombre, cedula:sol.cedula, correo:sol.correo, telefono:sol.telefono},
+          sala: 'admin_usuario_'+sol.correo
+        };
+        Auth.setRole('usuario', {email:sol.correo, value:sol.correo}, 'Cliente');
+        await UsuarioApp.refreshTickets();
+        Router.go('usuario');
+        UsuarioApp.tab('u-tickets');
+      }
+    }catch(e){ console.warn('No se pudo dejar la sesión lista tras el pago con Bold', e); }
+  }
+
   const msg = document.getElementById('boldResultMsg');
   if(msg){
     if(estado==='aprobada' && ticketsEncontrados>0){
-      msg.innerHTML = '¡Pago confirmado y entradas generadas! 🎉 Ingresa a "Comprar tickets → Mis tickets" con tu correo o cédula para ver tus entradas.';
+      msg.innerHTML = '¡Pago confirmado y entradas generadas! 🎉 Ya puedes verlas en "Mis tickets".';
       clearBoldOrder();
     }else if(estado==='rechazada'){
       msg.innerHTML = 'El pago no fue aprobado por Bold. Puedes intentarlo de nuevo desde "Comprar tickets".';
