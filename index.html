@@ -398,7 +398,6 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
   --stub-w:150px;
   position:relative; margin:0 0 30px; transform-origin:top center;
   animation:ticketFanIn .62s cubic-bezier(.22,.9,.32,1) both;
-  contain:layout paint;
 }
 @media(max-width:560px){ .ticket{ --stub-w:118px; margin-bottom:26px; } }
 .ticket:nth-child(odd){ --fan-rot:-6deg; }
@@ -444,6 +443,11 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 .t-stub-qr:hover{ transform:scale(1.06); }
 .t-stub-qr img,.t-stub-qr canvas{width:100%; height:100%;}
+/* El QR ampliado (modal "Código QR de tu entrada") se genera también a su
+   resolución nativa (440x440) para que no se vea borroso al escanear; sin
+   esta regla no se ajustaba al ancho del recuadro y el modal terminaba
+   mostrando el QR cortado / con scroll en el celular. */
+#qrZoomBox img,#qrZoomBox canvas{width:100%; height:100%; display:block;}
 .t-stub-brand{
   position:relative; z-index:1; writing-mode:vertical-rl; transform:rotate(180deg);
   font-family:'Orbitron',sans-serif; font-size:9px; letter-spacing:.24em; text-transform:uppercase;
