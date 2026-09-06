@@ -2924,7 +2924,11 @@ const EventSlider = {
   selectEvento(id){
     const evento = this.eventos.find(e=>e.id===id);
     if(!evento){ toast('Este evento ya no está disponible', true); return; }
-    ClienteAuth.openForEvent(evento);
+    // Antes pasaba por ClienteAuth (login/registro de cliente), lo que podía
+    // bloquear la compra con "ya existe un cliente con ese correo" aunque la
+    // persona nunca se hubiera registrado. Ahora va directo al formulario de
+    // datos del comprador (mismo camino que usa el admin en "Comprar tickets").
+    UsuarioApp.comprarEvento(evento);
   }
 };
 
