@@ -3710,14 +3710,22 @@ const AdminApp = {
     renderEventPill(this.evento);
     if(this.evento) this.tickets = await DB.ticketsByEvento(this.evento.id);
   },
-  tab(name){
+  async tab(name){
     document.querySelectorAll('#view-admin .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
     document.querySelectorAll('#view-admin .tab-pane').forEach(p=>p.classList.add('hide'));
     document.getElementById(name).classList.remove('hide');
     if(name==='a-eventos') this.renderEventos();
     if(name==='a-tickets') this.renderTickets();
     if(name==='a-usuarios') this.renderUsuarios();
-    if(name==='a-stats') this.renderStats();
+    if(name==='a-stats'){
+      // La pestaña de Estadísticas depende de this.tickets (ventas por
+      // vendedor, tipo de pago, total recaudado). Ese arreglo solo se
+      // refrescaba al cargar la app o tras ciertas acciones puntuales, así
+      // que si entrabas aquí directamente veías datos viejos o vacíos.
+      // Se refresca aquí explícitamente antes de calcular el consolidado.
+      this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : [];
+      this.renderStats();
+    }
     if(name==='a-mapa') this.renderMapa();
     if(name==='a-patro') this.renderPatrocinadores();
     if(name==='a-compras'){
@@ -3730,7 +3738,7 @@ const AdminApp = {
     AutoRefresh.stop('admin-tab');
     if(name==='a-tickets') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-tickets') this.renderTickets(); }, 20000);
     if(name==='a-compras') AutoRefresh.start('admin-tab', ()=>this.renderCompras(), 15000);
-    if(name==='a-stats') AutoRefresh.start('admin-tab', ()=>this.renderStats(), 30000);
+    if(name==='a-stats') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-stats') this.renderStats(); }, 30000);
     this.current = name;
   },
   renderMapa(){
