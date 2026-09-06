@@ -889,6 +889,14 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
               <input id="clientRegisterName" type="text" autocomplete="name" placeholder="Tu nombre">
             </div>
             <div class="field">
+              <label>Cédula</label>
+              <input id="clientRegisterCedula" type="text" inputmode="numeric" autocomplete="off" placeholder="Número de cédula" required>
+            </div>
+            <div class="field">
+              <label>Teléfono</label>
+              <input id="clientRegisterTelefono" type="tel" autocomplete="tel" placeholder="Ej: 3001234567" required>
+            </div>
+            <div class="field">
               <label>Correo electrónico</label>
               <input id="clientRegisterEmail" type="email" autocomplete="email" placeholder="correo@ejemplo.com" required>
             </div>
@@ -1657,16 +1665,18 @@ const ClienteAuth = {
   },
   async register(){
     const nombre=document.getElementById('clientRegisterName').value.trim();
+    const cedula=document.getElementById('clientRegisterCedula').value.trim();
+    const telefono=document.getElementById('clientRegisterTelefono').value.trim();
     const email=document.getElementById('clientRegisterEmail').value.trim().toLowerCase();
     const password=document.getElementById('clientRegisterPassword').value;
     const password2=document.getElementById('clientRegisterPassword2').value;
-    if(!nombre||!email||!password||!password2){toast('Completa todos los campos',true);return;}
+    if(!nombre||!cedula||!telefono||!email||!password||!password2){toast('Completa todos los campos',true);return;}
     if(password.length<6){toast('La contraseña debe tener al menos 6 caracteres',true);return;}
     if(password!==password2){toast('Las contraseñas no coinciden',true);return;}
     const evento=await this.getPendingEvento(); if(!evento){toast('Selecciona un evento para continuar',true);Router.go('landing');return;}
     const btn=document.getElementById('clientRegisterBtn'); if(btn){btn.disabled=true;btn.textContent='Creando cuenta...';}
     try{
-      const {data,error}=await sb.rpc('crear_cliente',{p_nombre:nombre,p_correo:email,p_password:password});
+      const {data,error}=await sb.rpc('crear_cliente',{p_nombre:nombre,p_correo:email,p_password:password,p_cedula:cedula,p_telefono:telefono});
       if(error){
         if(/duplicate|unique|ya existe|correo/i.test(error.message||'')) toast('Ya existe un cliente con ese correo. Inicia sesión.',true);
         else toast('No se pudo crear la cuenta: '+error.message,true);
@@ -1707,11 +1717,15 @@ const ClienteAuth = {
     const cedula=customer.cedula||'';
     const telefono=customer.telefono||'';
     Auth.setRole('usuario',{email,customer_id:customer.id||'',nombre},'Cliente');
+    // Si la cuenta del cliente no tiene cédula o teléfono guardados (por ejemplo,
+    // cuentas creadas antes de pedir esos campos), no se debe saltar el formulario
+    // de datos del comprador: si no se piden aquí, Bold no los recibe al pagar.
+    const datosCompletos = !!(nombre && cedula && email && telefono);
     UsuarioApp.compra={
       evento,asientos:[],seleccion:{},
-      comprador:{nombre,cedula,correo:email,telefono},
+      comprador: datosCompletos ? {nombre,cedula,correo:email,telefono} : null,
       sala:'admin_usuario_'+email,
-      prefillEmail:email,prefillName:nombre
+      prefillEmail:email,prefillName:nombre,prefillCedula:cedula,prefillTelefono:telefono
     };
     UsuarioApp.evento=evento;
     try{
@@ -1813,7 +1827,10 @@ const Auth = {
       if(saved.role === 'usuario' && saved.identity){
         const correo = saved.identity.email || saved.identity.value || '';
         if(correo){
-          UsuarioApp.compra = {evento:null, asientos:[], seleccion:{}, comprador:{nombre:saved.identity.nombre||'', cedula:'', correo, telefono:''}, sala:'admin_usuario_'+correo};
+          // No se saltan cédula/teléfono: si no se conocen (compra:null aquí),
+          // la pestaña "Comprar tickets" pedirá el formulario de datos completo
+          // antes de continuar, en vez de mandar campos vacíos a Bold.
+          UsuarioApp.compra = {evento:null, asientos:[], seleccion:{}, comprador:null, sala:'admin_usuario_'+correo, prefillName:saved.identity.nombre||'', prefillEmail:correo};
           this.setRole('usuario', saved.identity, saved.label||'Cliente');
           await UsuarioApp.refreshTickets();
           Router.go('usuario');
@@ -3249,9 +3266,9 @@ const UsuarioApp = {
           <p class="hint" style="margin-bottom:4px;">Evento: <b>${escapeHtml(this.compra.evento.nombre)}</b></p>
           <p class="hint" style="margin-bottom:14px;">Completa tus datos de compra para elegir tu ubicación y realizar el pago.</p>
           <div class="field"><label>Nombre completo</label><input id="cmpNombre" value="${escapeHtml(this.compra.prefillName||'')}"></div>
-          <div class="field"><label>Cédula</label><input id="cmpCedula"></div>
+          <div class="field"><label>Cédula</label><input id="cmpCedula" value="${escapeHtml(this.compra.prefillCedula||'')}"></div>
           <div class="field"><label>Correo</label><input id="cmpCorreo" type="email" value="${escapeHtml(this.compra.prefillEmail||'')}"></div>
-          <div class="field"><label>Teléfono</label><input id="cmpTelefono"></div>
+          <div class="field"><label>Teléfono</label><input id="cmpTelefono" value="${escapeHtml(this.compra.prefillTelefono||'')}"></div>
           <button class="btn btn-primary btn-block" onclick="UsuarioApp.registrarComprador()">Continuar</button>
         </div>`;
       return;
