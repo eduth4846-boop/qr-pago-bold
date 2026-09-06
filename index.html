@@ -847,6 +847,37 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       </div>
     </section>
 
+    <!-- ============ LOGIN: BANNER DE EVENTO (correo/cédula o código VAL) ============ -->
+    <section id="view-login-evento" class="hide">
+      <div class="auth-shell client-auth-shell">
+        <span class="back" onclick="Router.go('landing')">‹ volver</span>
+        <div class="client-auth-event" id="eventoLoginEvent"></div>
+        <div class="card client-auth-card">
+          <div class="section-title"><h2>Ingresa a tu cuenta</h2></div>
+          <p class="hint client-auth-subtitle">Consulta tus entradas con tu correo o cédula.</p>
+          <form onsubmit="event.preventDefault(); UsuarioApp.login();">
+            <div class="field">
+              <label>Correo o cédula</label>
+              <input id="userLookup" type="text" autocomplete="email" placeholder="correo@ejemplo.com o cédula">
+            </div>
+            <button class="btn btn-primary btn-block btn-lg" type="submit">Ingresar</button>
+          </form>
+          <p class="hint" style="text-align:center; margin:14px 0 6px;">o, si lo prefieres</p>
+          <form onsubmit="event.preventDefault(); UsuarioApp.loginByCode();">
+            <div class="field">
+              <label>Código de validación (opcional)</label>
+              <input id="userValCode" type="text" autocomplete="off" placeholder="Código VAL">
+            </div>
+            <button class="btn btn-block" type="submit">Buscar por código</button>
+          </form>
+          <div class="client-auth-actions" style="margin-top:16px;">
+            <button class="client-auth-new" type="button" onclick="UsuarioApp.comprarEvento(UsuarioApp.evento)">Aún no tengo tickets · Quiero comprar</button>
+          </div>
+          <div class="client-auth-note">Si ya compraste, aquí verás tus entradas, podrás transferirlas, ver el mapa del evento y escribirnos por PQR.</div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ LOGIN: CLIENTE ============ -->
     <section id="view-login-usuario" class="hide">
       <div class="auth-shell client-auth-shell">
@@ -2924,11 +2955,7 @@ const EventSlider = {
   selectEvento(id){
     const evento = this.eventos.find(e=>e.id===id);
     if(!evento){ toast('Este evento ya no está disponible', true); return; }
-    // Antes pasaba por ClienteAuth (login/registro de cliente), lo que podía
-    // bloquear la compra con "ya existe un cliente con ese correo" aunque la
-    // persona nunca se hubiera registrado. Ahora va directo al formulario de
-    // datos del comprador (mismo camino que usa el admin en "Comprar tickets").
-    UsuarioApp.comprarEvento(evento);
+    UsuarioApp.abrirLoginEvento(evento);
   }
 };
 
@@ -2940,6 +2967,21 @@ const UsuarioApp = {
     Router.go('landing');
     setTimeout(()=>document.getElementById('evtSliderWrap')?.scrollIntoView({behavior:'smooth', block:'center'}), 100);
     toast('Selecciona un evento para continuar como cliente.');
+  },
+  // Se llama al hacer clic en un evento del slider de publicidad (banner):
+  // muestra el login por correo/cédula (o código VAL) para que, si la
+  // persona ya compró, entre directo a ver sus tickets, transferir,
+  // el mapa del evento y el chat/PQR. Si aún no tiene tickets, desde ahí
+  // mismo puede pasar a "Quiero comprar" (comprarEvento).
+  abrirLoginEvento(evento){
+    this.evento = evento;
+    renderEventPill(evento);
+    const info = document.getElementById('eventoLoginEvent');
+    if(info) info.innerHTML = evento ? `Evento seleccionado: <b>${escapeHtml(evento.nombre||'')}</b>` : '';
+    const lookup = document.getElementById('userLookup'); if(lookup) lookup.value = '';
+    const code = document.getElementById('userValCode'); if(code) code.value = '';
+    Router.go('login-evento');
+    setTimeout(()=>document.getElementById('userLookup')?.focus(), 40);
   },
   // Se llama al hacer clic en un evento del slider de publicidad: lleva
   // directo a la interfaz de compra de ese evento específico.
