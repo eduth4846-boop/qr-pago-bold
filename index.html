@@ -6117,6 +6117,29 @@ async function generarReciboBold(sol, boldOrderId){
     doc.setFont('helvetica','bold'); doc.setFontSize(10.5);
     doc.text('TOTAL PAGADO', 10, y);
     doc.text(money(total), pageW-10, y, {align:'right'}); y+=9;
+
+    // ---- QR de validación: apunta a la misma pantalla de "validar ticket"
+    // que usa el recibo de efectivo, ya filtrada por este evento, para que el
+    // comprador (o quien revise el recibo) pueda confirmar con su cédula o
+    // correo si las entradas quedaron aprobadas y disponibles.
+    try{
+      const qrUrl = `${location.origin}${location.pathname}?validar=1&evento=${sol.evento_id||''}`;
+      const qrData = await getQrDataUrl(qrUrl, 480);
+      if(qrData){
+        const qrSize = 28, qrFramePad = 2.5;
+        const qrFrameSize = qrSize + qrFramePad*2;
+        const qrCx = pageW/2;
+        doc.setFillColor(255,255,255);
+        doc.roundedRect(qrCx-qrFrameSize/2, y, qrFrameSize, qrFrameSize, 1.4, 1.4, 'F');
+        doc.addImage(qrData, 'PNG', qrCx-qrSize/2, y+qrFramePad, qrSize, qrSize);
+        y += qrFrameSize + 3;
+        doc.setFont('helvetica','normal'); doc.setFontSize(7.3); doc.setTextColor(60,50,80);
+        const qrLines = doc.splitTextToSize('Escanea este código e ingresa tu cédula o correo para validar el estado de tus entradas.', pageW-24);
+        doc.text(qrLines, qrCx, y, {align:'center'});
+        y += qrLines.length*3.5 + 5;
+      }
+    }catch(e){ /* si el QR falla, el recibo sigue siendo válido sin él */ }
+
     doc.setFont('helvetica','italic'); doc.setFontSize(7.5); doc.setTextColor(90,80,110);
     const nota = doc.splitTextToSize('Este documento es un comprobante de pago informativo, adicional al ticket con código QR que necesitas para ingresar al evento.', pageW-20);
     doc.text(nota, pageW/2, y, {align:'center'});
