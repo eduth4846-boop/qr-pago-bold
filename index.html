@@ -1060,6 +1060,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="a-mapa" onclick="AdminApp.tab('a-mapa')">Mapa del evento</div>
         <div class="pill-tab" data-tab="a-patro" onclick="AdminApp.tab('a-patro')">Patrocinadores</div>
         <div class="pill-tab" data-tab="a-compras" onclick="AdminApp.tab('a-compras')">Solicitudes de compra</div>
+        <div class="pill-tab" data-tab="a-recibos" onclick="AdminApp.tab('a-recibos')">Recibos de pago</div>
         <div class="pill-tab" data-tab="a-chat" onclick="AdminApp.tab('a-chat')">Chat</div>
       </div>
       <div class="tabs" style="margin-top:-4px; margin-bottom:14px;">
@@ -1075,6 +1076,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div id="a-mapa" class="tab-pane hide"></div>
       <div id="a-patro" class="tab-pane hide"></div>
       <div id="a-compras" class="tab-pane hide"></div>
+      <div id="a-recibos" class="tab-pane hide"></div>
       <div id="a-chat" class="tab-pane hide"></div>
     </section>
 
@@ -1139,6 +1141,24 @@ const loadHtml5QrcodeLib = ()=>loadScriptOnce('https://unpkg.com/html5-qrcode@2.
 const loadExcelJsLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js');
 const loadJsPdfLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
 const loadBarcodeLib = ()=>loadScriptOnce('https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js');
+
+// Devuelve el logo de Cashless Colombia tal como ya está cargado en el DOM
+// (topbar o, si no está montado, el ring-logo de la landing), para poder
+// reutilizarlo dentro de los PDFs sin tener que duplicar el base64 del logo
+// en el código.
+function getCashlessLogoDataUrl(){
+  const img = document.querySelector('.topbar img.logo') || document.querySelector('.ring-logo img');
+  return img ? img.src : null;
+}
+// Genera un ID de recibo/transacción legible con formato "TIX" + 8
+// caracteres alfanuméricos en mayúscula (ej: TIXAE7JOV9Z), usado para
+// identificar cada recibo de pago generado (efectivo o Bold).
+function generarIdTransaccion(){
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = 'TIX';
+  for(let i=0;i<8;i++) out += chars[Math.floor(Math.random()*chars.length)];
+  return out;
+}
 
 // Id de orden Bold persistido durante el checkout para soportar la redirección.
 function saveBoldOrder(orderId, solicitudId){
@@ -1906,7 +1926,12 @@ const Seats = {
   async ensureSeeded(evento){
     const {count} = await sb.from('asientos').select('id',{count:'exact', head:true}).eq('evento_id', evento.id);
     if(count && count>0) return;
-    const mapa = evento.mapa || {palcos:8, vipUbicaciones:0, general:120};
+    // Antes este valor por defecto creaba 8 palcos + 120 sillas generales
+    // "fantasma" apenas se abría un evento sin mapa configurado todavía por
+    // el admin. Ahora, igual que en growToMapa() y en el formulario de admin,
+    // el valor por defecto es 0 en todo: solo se crean asientos que el admin
+    // configuró explícitamente desde "Mapa del evento".
+    const mapa = evento.mapa || {palcos:0, vipUbicaciones:0, general:0};
     const sillasPalco = Number(mapa.sillasPalco)||8;
     const sillasVip = Number(mapa.sillasVip)||8;
     const rows = [];
@@ -3700,6 +3725,7 @@ const UsuarioApp = {
         <div>${fmtTime(s.created_at)} ${badge}</div>
         <div class="hint">${(s.items||[]).map(it=>escapeHtml(it.ubicacion_detalle)).join(', ')} · ${money(s.total)}</div>
         ${s.metodo_pago==='bold' && s.bold_status ? `<p class="hint">Pago Bold: ${escapeHtml(s.bold_status)}</p>` : ''}${s.estado==='aprobada'?'<p class="hint">Ingresa a "Mis tickets" con tu correo o cédula para verlos.</p>':''}
+        ${s.recibo_url ? `<div style="margin-top:6px;"><a href="${s.recibo_url}" target="_blank" class="btn btn-sm">🧾 Ver recibo de pago (PDF, opcional)</a></div>` : ''}
       </div>`;
     }).join('');
   }
@@ -3796,11 +3822,13 @@ const AdminApp = {
       this.comprasAlert.revisada = true;
       this.actualizarBadgeCompras();
     }
+    if(name==='a-recibos') this.renderRecibos();
     if(name==='a-chat') this.renderChat();
     // Refresco en tiempo real de las pestañas con datos que cambian seguido.
     AutoRefresh.stop('admin-tab');
     if(name==='a-tickets') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-tickets') this.renderTickets(); }, 20000);
     if(name==='a-compras') AutoRefresh.start('admin-tab', ()=>this.renderCompras(), 15000);
+    if(name==='a-recibos') AutoRefresh.start('admin-tab', ()=>this.renderRecibos(), 20000);
     if(name==='a-stats') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-stats') this.renderStats(); }, 30000);
     this.current = name;
   },
@@ -3809,6 +3837,38 @@ const AdminApp = {
     if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento activo para editar su mapa.</p></div>`; return; }
     box.innerHTML = `<div class="card" style="margin-bottom:12px;"><p class="hint">Arrastra el encabezado (⠿) de cada palco, la zona VIP o la zona general para reubicarla. Pasa el cursor sobre una silla para ver su número. Los cambios se guardan y se reflejan en el mapa que ve el usuario.</p></div><div id="a-mapa-canvas"></div>`;
     MapView.render(document.getElementById('a-mapa-canvas'), this.evento.id, null, {editable:true});
+  },
+  /* ---------- Recibos de pago (efectivo + Bold) generados en las compras ---------- */
+  async renderRecibos(){
+    const box = document.getElementById('a-recibos');
+    box.innerHTML = `<div class="card"><p class="hint">Cargando recibos…</p></div>`;
+    const {data, error} = await sb.from('recibos_caja').select('*').order('created_at',{ascending:false}).limit(300);
+    if(error){ box.innerHTML = `<div class="card"><p class="hint">No se pudieron cargar los recibos: ${escapeHtml(error.message)}</p></div>`; return; }
+    const recibos = data || [];
+    if(!recibos.length){ box.innerHTML = `<div class="card"><p class="hint">Todavía no se ha generado ningún recibo de pago.</p></div>`; return; }
+    const evNombre = id => { const e = this.eventos.find(x=>x.id===id); return e ? e.nombre : ''; };
+    box.innerHTML = `
+      <div class="card">
+        <div class="section-title"><h2 style="font-size:17px;">Recibos de pago</h2></div>
+        <p class="hint">Todos los recibos generados por las compras de tickets (efectivo en punto de venta y pagos por Bold), con el ID de transacción de cada uno.</p>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Fecha</th><th>Evento</th><th>Cliente</th><th>Método</th><th>ID transacción</th><th>Total</th><th>Recibo</th>
+        </tr></thead><tbody>
+        ${recibos.map(r=>{
+          const metodo = r.metodo_pago==='bold' ? 'Bold (pasarela)' : r.metodo_pago==='efectivo' ? 'Efectivo' : (r.metodo_pago||'—');
+          const idTx = r.transaccion_id || (r.metodo_pago==='efectivo' ? 'CAJA-'+String(r.id).padStart(6,'0') : '—');
+          return `<tr>
+            <td>${fmtTime(r.created_at)}</td>
+            <td>${escapeHtml(evNombre(r.evento_id))}</td>
+            <td>${escapeHtml(r.cliente_nombre||'')}</td>
+            <td>${escapeHtml(metodo)}</td>
+            <td class="mono">${escapeHtml(idTx)}</td>
+            <td>${money(r.total||0)}</td>
+            <td>${r.pdf_url ? `<a href="${r.pdf_url}" target="_blank" class="btn btn-sm">🧾 Ver PDF</a>` : '<span class="hint">Sin PDF</span>'}</td>
+          </tr>`;
+        }).join('')}
+        </tbody></table></div>
+      </div>`;
   },
   /* ---------- Ubicaciones para patrocinadores (palcos a valor 0) ---------- */
   async renderPatrocinadores(){
@@ -5981,6 +6041,97 @@ document.addEventListener('DOMContentLoaded', async ()=>{
 /* =========================================================
    RETORNO DESDE BOLD (tras completar el pago)
 ========================================================= */
+// Genera el recibo de pago en PDF cuando una compra fue aprobada por Bold:
+// lleva el logo de Cashless, los datos del comprador, el detalle de la
+// compra, los datos de la transacción de Bold (orden + estado) y un ID de
+// recibo propio con formato TIXXXXXXXX. El PDF se sube a Storage y queda
+// adjunto de forma opcional (columna recibo_url de la solicitud, igual que
+// con el recibo de efectivo) para que el comprador pueda verlo desde "Mis
+// tickets"/"Mis solicitudes"; además queda registrado en recibos_caja para
+// que el admin lo vea en la pestaña "Recibos de pago".
+// NOTA: además de las columnas ya usadas por el recibo de efectivo, este
+// recibo guarda bold_order_id, transaccion_id y bold_status en la tabla
+// recibos_caja; si esas columnas no existen todavía hay que agregarlas en
+// Supabase (tipo texto) para que el insert no falle.
+async function generarReciboBold(sol, boldOrderId){
+  if(!sol || sol.recibo_url) return; // ya se generó antes: no repetir
+  try{
+    const transaccionId = generarIdTransaccion();
+    const items = sol.items || [];
+    const total = sol.total || 0;
+
+    const {data: recibo, error} = await sb.from('recibos_caja').insert({
+      evento_id: sol.evento_id,
+      cliente_nombre: sol.nombre, cliente_cedula: sol.cedula,
+      cliente_correo: sol.correo, cliente_telefono: sol.telefono,
+      items, total, metodo_pago: 'bold',
+      bold_order_id: boldOrderId || null,
+      transaccion_id: transaccionId,
+      bold_status: sol.bold_status || 'aprobada'
+    }).select();
+    if(error || !recibo || !recibo[0]){ console.warn('No se pudo registrar el recibo de pago Bold:', error); return; }
+    const consecutivo = String(recibo[0].id).padStart(6,'0');
+
+    await loadJsPdfLib();
+    const { jsPDF } = window.jspdf;
+    const logo = getCashlessLogoDataUrl();
+    const doc = new jsPDF({unit:'mm', format:'a5'});
+    const pageW = 148; let y = 14;
+    if(logo){
+      try{ doc.addImage(logo, 'WEBP', (pageW-18)/2, y, 18, 18); y += 22; }
+      catch(e){ /* si el navegador/versión de jsPDF no soporta WEBP, seguimos solo con el texto */ }
+    }
+    doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(30,15,55);
+    doc.text('CASHLESS COLOMBIA', pageW/2, y, {align:'center'}); y+=6;
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(60,50,80);
+    doc.text('Recibo de pago · Pasarela Bold', pageW/2, y, {align:'center'}); y+=8;
+    doc.line(10,y,pageW-10,y); y+=6;
+
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(0,0,0);
+    doc.text('ID de transacción: '+transaccionId, 10, y); y+=6;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+    doc.text('Recibo No. '+consecutivo, 10, y); y+=5;
+    doc.text('Emitido: '+new Date().toLocaleString('es-CO'), 10, y); y+=5;
+    if(boldOrderId){ doc.text('Orden Bold: '+boldOrderId, 10, y); y+=5; }
+    doc.text('Estado del pago: '+(sol.bold_status||'aprobada'), 10, y); y+=7;
+
+    doc.line(10,y,pageW-10,y); y+=6;
+    doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.text('Datos del comprador', 10, y); y+=5;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+    doc.text('Nombre: '+(sol.nombre||''), 10, y); y+=5;
+    doc.text('Cédula: '+(sol.cedula||''), 10, y); y+=5;
+    if(sol.correo){ doc.text('Correo: '+sol.correo, 10, y); y+=5; }
+    if(sol.telefono){ doc.text('Teléfono: '+sol.telefono, 10, y); y+=5; }
+    y+=2; doc.line(10,y,pageW-10,y); y+=6;
+
+    doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.text('Detalle de la compra', 10, y); y+=5;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8);
+    items.forEach(it=>{
+      const label = it.ubicacion_detalle || it.categoria || it.zona || 'Entrada';
+      const lines = doc.splitTextToSize(String(label), 90);
+      doc.text(lines, 10, y);
+      doc.text(money(it.precio||0), pageW-10, y, {align:'right'});
+      y += Math.max(lines.length,1)*4.2;
+    });
+    y+=2; doc.line(10,y,pageW-10,y); y+=6;
+    doc.setFont('helvetica','bold'); doc.setFontSize(10.5);
+    doc.text('TOTAL PAGADO', 10, y);
+    doc.text(money(total), pageW-10, y, {align:'right'}); y+=9;
+    doc.setFont('helvetica','italic'); doc.setFontSize(7.5); doc.setTextColor(90,80,110);
+    const nota = doc.splitTextToSize('Este documento es un comprobante de pago informativo, adicional al ticket con código QR que necesitas para ingresar al evento.', pageW-20);
+    doc.text(nota, pageW/2, y, {align:'center'});
+
+    const filename = 'recibo_bold_'+transaccionId+'.pdf';
+    const pdfBlob = doc.output('blob');
+    const pdfFile = new File([pdfBlob], filename, {type:'application/pdf'});
+    const recibo_url = await uploadToBucket('recibos', pdfFile, 'bold/'+(sol.evento_id||'evento'));
+    await sb.from('recibos_caja').update({pdf_url: recibo_url}).eq('id', recibo[0].id);
+    await sb.from('solicitudes_compra').update({recibo_url}).eq('id', sol.id);
+  }catch(e){
+    console.warn('No se pudo generar el recibo de pago de Bold:', e);
+  }
+}
+
 async function checkBoldReturn(){
   const params = new URLSearchParams(location.search);
   // SOLO procesamos una respuesta de Bold cuando Bold devolvió explícitamente
@@ -6037,6 +6188,10 @@ async function checkBoldReturn(){
     try{
       const {data: solRows} = await sb.from('solicitudes_compra').select('*').eq('id', solicitudId).limit(1);
       const sol = solRows && solRows[0];
+      // Genera (una sola vez) el recibo de pago en PDF de esta compra Bold y
+      // lo deja adjunto a la solicitud para verlo opcionalmente desde "Mis
+      // tickets". No bloquea el resto del flujo si falla.
+      if(sol) generarReciboBold(sol, orderId).catch(e=>console.warn('Recibo Bold:', e));
       if(sol && sol.correo){
         UsuarioApp.compra = {
           evento: null, asientos:[], seleccion:{},
