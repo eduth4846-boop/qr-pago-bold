@@ -4949,26 +4949,40 @@ const AdminApp = {
   },
 
   /* ---------- SOLICITUDES DE COMPRA ---------- */
+  // Antes esto exigía tener un evento activo seleccionado y solo mostraba
+  // las solicitudes de ese evento. Ahora se listan las solicitudes de
+  // TODOS los eventos (no hace falta seleccionar uno), mostrando el
+  // nombre del evento en cada tarjeta para poder identificarlas.
   async loadCompras(){
-    if(!this.evento) return [];
-    const {data, error} = await sb.from('solicitudes_compra').select('*').eq('evento_id', this.evento.id).order('created_at',{ascending:false});
+    const {data, error} = await sb.from('solicitudes_compra').select('*').order('created_at',{ascending:false});
     if(error){ console.error(error); return []; }
     return data || [];
   },
   async renderCompras(){
     const box = document.getElementById('a-compras');
-    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento activo para ver sus solicitudes de compra.</p></div>`; return; }
     box.innerHTML = `<div class="card"><p class="hint">Cargando solicitudes…</p></div>`;
     const compras = await this.loadCompras();
     this._comprasCache = compras;
-    if(!compras.length){ box.innerHTML = `<div class="card"><p class="hint">Aún no hay solicitudes de compra para este evento.</p></div>`; return; }
+    if(!compras.length){ box.innerHTML = `<div class="card"><p class="hint">Aún no hay solicitudes de compra.</p></div>`; return; }
+    // Nombre de cada evento involucrado, para mostrarlo en la tarjeta ya
+    // que ahora las solicitudes pueden ser de eventos distintos.
+    const eventoIds = [...new Set(compras.map(s=>s.evento_id).filter(Boolean))];
+    let nombresPorEvento = {};
+    if(eventoIds.length){
+      try{
+        const {data} = await sb.from('eventos').select('id,nombre').in('id', eventoIds);
+        (data||[]).forEach(e=>{ nombresPorEvento[e.id] = e.nombre; });
+      }catch(e){ /* si falla, simplemente no se muestra el nombre del evento */ }
+    }
     box.innerHTML = compras.map(s=>{
       const items = (s.items||[]).map(it=>`${escapeHtml(it.ubicacion_detalle||it.zona)} · ${money(it.precio)}`).join('<br>');
       const badge = s.estado==='aprobada' ? '<span class="badge ok">Aprobada</span>' : s.estado==='rechazada' ? '<span class="badge bad">Rechazada</span>' : '<span class="badge warn">Pendiente</span>';
+      const evNombre = nombresPorEvento[s.evento_id] || '';
       return `<div class="stat" style="margin-bottom:12px;">
         <div class="row" style="justify-content:space-between; align-items:flex-start; flex-wrap:wrap;">
           <div>
             <b>${escapeHtml(s.nombre)}</b> ${badge}${s.vt_usuario ? ` <span class="badge">Vendedor: ${escapeHtml(s.vt_usuario)}</span>` : ''}<br>
+            ${evNombre ? `<span class="hint" style="color:var(--cyan);">${escapeHtml(evNombre)}</span><br>` : ''}
             <span class="hint">${escapeHtml(s.correo)} · ${escapeHtml(s.cedula)} · ${escapeHtml(s.telefono||'')}</span>
             <div class="hint" style="margin-top:6px;">${items}</div>
             <div><b>Total: ${money(s.total)}</b></div>
@@ -5139,6 +5153,7 @@ const AdminApp = {
     if(sol.metodo_pago==='bold'){ toast('Las compras pagadas con Bold se confirman automáticamente mediante el webhook.'); return; }
     const rows = (sol.items||[]).map(it=>({
       evento_id: sol.evento_id,
+      solicitud_compra_id: sol.id,
       codigo: genCode('TK'),
       codigo_validacion: genCode('VAL'),
       categoria: it.categoria || it.zona,
