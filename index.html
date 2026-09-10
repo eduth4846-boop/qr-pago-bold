@@ -1625,8 +1625,13 @@ async function generarReciboPagoBold(sol, referenciaBold){
     if(recibo && recibo[0]) await sb.from('recibos_caja').update({pdf_url: recibo_url}).eq('id', recibo[0].id);
     return recibo_url;
   }catch(e){
+    // Antes este error se "tragaba" (solo console.error + return null), así
+    // que quien llamaba a esta función solo podía mostrar un mensaje
+    // genérico ("No se pudo generar el recibo de pago") sin saber la causa
+    // real (bucket de Storage inexistente, política RLS, CDN de jsPDF
+    // bloqueado, etc.). Ahora se relanza el error para que sí se muestre.
     console.error('Error generando el recibo de pago', e);
-    return null;
+    throw e;
   }finally{
     NetworkActivity.end();
   }
@@ -3313,7 +3318,7 @@ const UsuarioApp = {
       const url = await generarReciboPagoBold(sol);
       if(url){ window.open(url, '_blank'); this.renderTickets(); }
       else toast('No se pudo generar el recibo de pago', true);
-    }catch(e){ toast('Error generando el recibo: '+(e.message||e), true); }
+    }catch(e){ console.error(e); toast('No se pudo generar el recibo: '+(e.message||e), true); }
   },
   // Comparte los datos del ticket usando el share sheet nativo del dispositivo
   // (WhatsApp, Mensajes, etc.) y si el navegador no lo soporta, abre WhatsApp Web.
@@ -5047,9 +5052,11 @@ const AdminApp = {
     const sol = (this._recibosPagoCache||[]).find(s=>s.id===id);
     if(!sol){ toast('Solicitud no encontrada', true); return; }
     toast('Generando recibo de pago…');
-    const url = await generarReciboPagoBold(sol);
-    if(url){ toast('Recibo de pago generado'); this.renderRecibosPago(); }
-    else toast('No se pudo generar el recibo de pago', true);
+    try{
+      const url = await generarReciboPagoBold(sol);
+      if(url){ toast('Recibo de pago generado'); this.renderRecibosPago(); }
+      else toast('No se pudo generar el recibo de pago', true);
+    }catch(e){ console.error(e); toast('No se pudo generar el recibo: '+(e.message||e), true); }
   },
 
   /* ---------- Edición manual de una solicitud antes de aprobarla ---------- */
