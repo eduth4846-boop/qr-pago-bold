@@ -2244,38 +2244,63 @@ const Seats = {
   // corrige tanto en el arreglo que se va a mostrar como en la base de datos,
   // para que el mapa deje de ofrecer ese puesto como disponible.
   async reconciliarConTickets(eventoId, asientos){
-    if(!asientos.length) return;
-    const {data: tickets} = await sb.from('tickets').select('id,zona,ubicacion_tipo,ubicacion_detalle,estado').eq('evento_id', eventoId).neq('estado','anulado');
+    const {data: tickets} = await sb.from('tickets').select('id,zona,ubicacion_tipo,ubicacion_detalle,categoria,estado').eq('evento_id', eventoId).neq('estado','anulado');
     if(!tickets || !tickets.length) return;
     const porNumero = {};
     asientos.forEach(a=>{ porNumero[a.numero] = a; });
-    const numeroDesdeTicket = (t) => {
-      const zona = (t.ubicacion_tipo||'').toLowerCase();
+    // Deduce a qué número de asiento y a qué zona corresponde un ticket,
+    // aunque haya sido creado por un proceso externo (como la sincronización
+    // desde la app local) que no llenó los mismos campos que usa esta app.
+    // Usa "ubicacion_tipo" y, si falta, "categoria" como respaldo para saber
+    // la zona (palco/vip/general/categoría personalizada).
+    const inferir = (t) => {
+      const zonaCruda = (t.ubicacion_tipo || t.categoria || '').toString().toLowerCase().trim();
       const det = (t.ubicacion_detalle||'').trim();
       if(!det) return null;
       // Caso 1: el detalle ya es el número crudo del asiento (ej. "P3-S1", "VIP1-S2", "G4")
-      if(porNumero[det]) return det;
+      if(porNumero[det]) return {numero: det, zona: porNumero[det].zona};
       // Caso 2: etiqueta humana "Palco N · Silla SX" / "VIP N · Silla SX" / "General · GX" / "Categoría · X"
       const partes = det.split('·').map(s=>s.trim());
       if(partes.length===2){
         const num = partes[1].replace(/^Silla\s*/i,'').trim();
-        if(zona==='palco'){ const n = partes[0].replace(/^Palco\s*/i,'').trim(); return `P${n}-${num}`; }
-        if(zona==='vip'){ const n = partes[0].replace(/^VIP\s*/i,'').trim(); return n ? `VIP${n}-${num}` : num; }
-        return num; // general y categorías personalizadas usan el número tal cual
+        if(zonaCruda==='palco' || /^palco/i.test(partes[0])){
+          const n = partes[0].replace(/^Palco\s*/i,'').trim();
+          return {numero: `P${n}-${num}`, zona:'palco'};
+        }
+        if(zonaCruda==='vip' || /^vip/i.test(partes[0])){
+          const n = partes[0].replace(/^VIP\s*/i,'').trim();
+          return {numero: n ? `VIP${n}-${num}` : num, zona:'vip'};
+        }
+        if(/^general/i.test(partes[0])) return {numero: num, zona:'general'};
+        return {numero: num, zona: zonaCruda || 'general'};
       }
-      return null;
+      // Sin "·": no hay forma humana reconocible, se usa tal cual con la zona que se tenga.
+      return {numero: det, zona: zonaCruda || 'general'};
     };
     const updates = [];
+    const nuevos = [];
     tickets.forEach(t=>{
-      const numero = numeroDesdeTicket(t);
-      if(!numero) return;
-      const asiento = porNumero[numero];
-      if(asiento && !asiento.ocupado){
-        asiento.ocupado = true;
-        asiento.ticket_id = asiento.ticket_id || t.id;
-        updates.push(sb.from('asientos').update({ocupado:true, ticket_id:t.id}).eq('id', asiento.id).eq('ocupado', false));
+      const info = inferir(t);
+      if(!info) return;
+      const existente = porNumero[info.numero];
+      if(existente){
+        if(!existente.ocupado){
+          existente.ocupado = true;
+          existente.ticket_id = existente.ticket_id || t.id;
+          updates.push(sb.from('asientos').update({ocupado:true, ticket_id:t.id}).eq('id', existente.id).eq('ocupado', false));
+        }
+      }else{
+        // La silla vendida ni siquiera existe todavía como fila en "asientos"
+        // de la nube (típico si la sincronización solo insertó el ticket).
+        // Se crea de una vez marcada como ocupada para que deje de faltar
+        // en el mapa y no pueda revenderse.
+        nuevos.push({evento_id:eventoId, zona:info.zona, numero:info.numero, ocupado:true, ticket_id:t.id});
       }
     });
+    if(nuevos.length){
+      const {data: creados} = await sb.from('asientos').insert(nuevos).select();
+      (creados||[]).forEach(a=>{ porNumero[a.numero]=a; asientos.push(a); });
+    }
     if(updates.length) await Promise.all(updates).catch(()=>{});
   },
   // Asegura que existan al menos "cantidad" asientos libres en la zona indicada,
