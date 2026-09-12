@@ -1165,6 +1165,51 @@ function toast(msg, err){
   setTimeout(()=>{ el.remove(); }, 4200);
 }
 function money(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
+/* ---------- Exportar / Importar evento (CSV) ----------
+   Permite descargar toda la configuración de un evento (nombre, fecha,
+   hora, estado, imagen y el objeto "mapa" con pisos/palcos/VIP/general/
+   categorías/precios/servicios) en un .csv que abre directo en Excel, y
+   luego importarlo en otra instancia de la plataforma (por ejemplo una
+   copia local) para crear el evento sin tener que digitar todo de nuevo.
+   Los asientos no se exportan: se regeneran automáticamente a partir del
+   "mapa" con Seats.ensureSeeded al crear/importar el evento. */
+function csvEscape(val){
+  const s = String(val===null||val===undefined ? '' : val);
+  return '"' + s.replace(/"/g,'""') + '"';
+}
+function csvBuildRow(arr){ return arr.map(csvEscape).join(','); }
+function parseCsv(text){
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for(let i=0; i<text.length; i++){
+    const c = text[i];
+    if(inQuotes){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field += '"'; i++; }
+        else { inQuotes = false; }
+      } else { field += c; }
+    } else {
+      if(c === '"'){ inQuotes = true; }
+      else if(c === ','){ row.push(field); field=''; }
+      else if(c === '\r'){ /* se ignora, el salto real lo marca \n */ }
+      else if(c === '\n'){ row.push(field); field=''; rows.push(row); row=[]; }
+      else { field += c; }
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  if(rows.length && rows[0].length && rows[0][0].charCodeAt(0)===0xFEFF){
+    rows[0][0] = rows[0][0].slice(1);
+  }
+  return rows.filter(r => !(r.length===1 && r[0]===''));
+}
+function descargarArchivo(nombreArchivo, contenido, tipo){
+  const blob = new Blob(['\uFEFF'+contenido], {type:(tipo||'text/csv')+';charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nombreArchivo;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
 // Plantilla visual (boleta neón con talón troquelado) usada para los
 // tickets de patrocinio en PDF; se referencia por proporción (2:1) y no
 // por tamaño de píxel exacto.
@@ -1625,13 +1670,8 @@ async function generarReciboPagoBold(sol, referenciaBold){
     if(recibo && recibo[0]) await sb.from('recibos_caja').update({pdf_url: recibo_url}).eq('id', recibo[0].id);
     return recibo_url;
   }catch(e){
-    // Antes este error se "tragaba" (solo console.error + return null), así
-    // que quien llamaba a esta función solo podía mostrar un mensaje
-    // genérico ("No se pudo generar el recibo de pago") sin saber la causa
-    // real (bucket de Storage inexistente, política RLS, CDN de jsPDF
-    // bloqueado, etc.). Ahora se relanza el error para que sí se muestre.
     console.error('Error generando el recibo de pago', e);
-    throw e;
+    return null;
   }finally{
     NetworkActivity.end();
   }
@@ -3318,7 +3358,7 @@ const UsuarioApp = {
       const url = await generarReciboPagoBold(sol);
       if(url){ window.open(url, '_blank'); this.renderTickets(); }
       else toast('No se pudo generar el recibo de pago', true);
-    }catch(e){ console.error(e); toast('No se pudo generar el recibo: '+(e.message||e), true); }
+    }catch(e){ toast('Error generando el recibo: '+(e.message||e), true); }
   },
   // Comparte los datos del ticket usando el share sheet nativo del dispositivo
   // (WhatsApp, Mensajes, etc.) y si el navegador no lo soporta, abre WhatsApp Web.
@@ -4313,6 +4353,12 @@ const AdminApp = {
       <div class="grid-2">
         <div class="card">
           <div class="section-title"><h2 style="font-size:19px;">Crear evento</h2></div>
+          <div class="field" style="border:1px dashed var(--line-soft); border-radius:12px; padding:10px;">
+            <label>Importar evento (archivo exportado)</label>
+            <input id="evImportFile" type="file" accept=".csv">
+            <button class="btn btn-sm" type="button" style="margin-top:8px;" onclick="AdminApp.importarEventoDesdeArchivo()">📥 Importar evento</button>
+            <p class="hint" style="margin-top:4px;">Sube aquí el .csv exportado con el botón "Exportar" de otro evento (por ejemplo, desde esta misma plataforma en línea) para crear una copia local con la misma configuración, sin digitar todo de nuevo. La imagen del evento no se importa: si la necesitas, súbela de nuevo después.</p>
+          </div>
           <div class="field"><label>Nombre del evento</label><input id="evNombre" placeholder="ej: Cashless Fest 2026"></div>
           <div class="field"><label>Imagen / flyer del evento</label><input id="evImagen" type="file" accept="image/*">
             <p class="hint" style="margin-top:4px;">Se mostrará en el slider de publicidad del inicio.</p>
@@ -4398,6 +4444,7 @@ const AdminApp = {
           <button class="btn btn-sm" onclick="AdminApp.toggleEvento('${e.id}','${e.estado}')">${e.estado==='activo'?'Pausar':'Activar'}</button>
           <button class="btn btn-sm" onclick="AdminApp.openAjustarMapa('${e.id}')">Ajustar palcos/VIP</button>
           <button class="btn btn-sm" onclick="AdminApp.configurarPago('${e.id}')">Config. de pago</button>
+          <button class="btn btn-sm" onclick="AdminApp.exportarEvento('${e.id}')">⬇️ Exportar</button>
         </div>
         <div id="mapaEdit-${e.id}" class="hide" style="margin-top:10px; border-top:1px dashed var(--line); padding-top:10px;">
           <div class="field">
@@ -4862,6 +4909,55 @@ const AdminApp = {
     await Seats.ensureSeeded(this.evento);
     this.renderEventos();
   },
+  /* Exporta TODA la configuración de un evento (nombre, código, fecha, hora,
+     estado, imagen y el "mapa" completo: pisos, palcos, VIP, general,
+     categorías, precios y servicios) a un .csv que abre en Excel. Ese
+     archivo es lo que luego se sube con "Importar evento" en otra
+     instancia/copia local de la plataforma para recrear el evento sin
+     digitar todo de nuevo. Los asientos no se incluyen: se regeneran solos
+     a partir del "mapa" al crear/importar el evento. */
+  exportarEvento(id){
+    const e = this.eventos.find(x=>x.id===id);
+    if(!e){ toast('Evento no encontrado', true); return; }
+    const headers = ['nombre','codigo','fecha','hora','estado','imagen_url','mapa'];
+    const fila = [e.nombre||'', e.codigo||'', e.fecha||'', e.hora||'', e.estado||'', e.imagen_url||'', JSON.stringify(e.mapa||{})];
+    const csv = csvBuildRow(headers) + '\r\n' + csvBuildRow(fila) + '\r\n';
+    descargarArchivo('evento_'+(e.codigo||e.id)+'.csv', csv);
+    toast('Evento exportado. Usa "Importar evento" en la otra plataforma para crearlo allá.');
+  },
+  /* Lee el .csv generado por "exportarEvento" y crea un evento nuevo (con
+     código propio) igual al original: mismo nombre, fecha, hora y "mapa"
+     (pisos/palcos/VIP/general/categorías/precios/servicios). Luego genera
+     los asientos automáticamente, igual que al crear un evento manualmente. */
+  async importarEventoDesdeArchivo(){
+    const inp = document.getElementById('evImportFile');
+    const file = inp && inp.files[0];
+    if(!file){ toast('Selecciona primero el archivo .csv exportado', true); return; }
+    let text;
+    try{ text = await file.text(); }
+    catch(e){ toast('No se pudo leer el archivo', true); return; }
+    const rows = parseCsv(text);
+    if(rows.length<2){ toast('El archivo no tiene datos de evento', true); return; }
+    const headers = rows[0].map(h=>String(h).trim().toLowerCase());
+    const datos = rows[1];
+    const get = (col)=>{ const idx = headers.indexOf(col); return idx>=0 ? (datos[idx]||'') : ''; };
+    const nombre = get('nombre').trim();
+    if(!nombre){ toast('El archivo no trae un nombre de evento válido', true); return; }
+    const fecha = get('fecha') || null;
+    const hora = get('hora') || null;
+    let mapa = {};
+    try{ mapa = JSON.parse(get('mapa') || '{}'); }
+    catch(e){ toast('El campo "mapa" del archivo no es un JSON válido', true); return; }
+    const codigo = genCode('EVT');
+    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url:null}).select();
+    if(error){ toast('Error importando el evento: '+error.message, true); console.error(error); return; }
+    toast('Evento importado: '+codigo+'. Si necesitas la imagen, súbela de nuevo desde "Ajustar palcos/VIP" o al editar el evento.');
+    if(inp) inp.value = '';
+    await this.loadEventos();
+    this.evento = data[0];
+    await Seats.ensureSeeded(this.evento);
+    this.renderEventos();
+  },
   async selectEvento(id){
     const ev = this.eventos.find(e=>e.id===id);
     await this.setEventoActivo(ev);
@@ -4954,40 +5050,26 @@ const AdminApp = {
   },
 
   /* ---------- SOLICITUDES DE COMPRA ---------- */
-  // Antes esto exigía tener un evento activo seleccionado y solo mostraba
-  // las solicitudes de ese evento. Ahora se listan las solicitudes de
-  // TODOS los eventos (no hace falta seleccionar uno), mostrando el
-  // nombre del evento en cada tarjeta para poder identificarlas.
   async loadCompras(){
-    const {data, error} = await sb.from('solicitudes_compra').select('*').order('created_at',{ascending:false});
+    if(!this.evento) return [];
+    const {data, error} = await sb.from('solicitudes_compra').select('*').eq('evento_id', this.evento.id).order('created_at',{ascending:false});
     if(error){ console.error(error); return []; }
     return data || [];
   },
   async renderCompras(){
     const box = document.getElementById('a-compras');
+    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento activo para ver sus solicitudes de compra.</p></div>`; return; }
     box.innerHTML = `<div class="card"><p class="hint">Cargando solicitudes…</p></div>`;
     const compras = await this.loadCompras();
     this._comprasCache = compras;
-    if(!compras.length){ box.innerHTML = `<div class="card"><p class="hint">Aún no hay solicitudes de compra.</p></div>`; return; }
-    // Nombre de cada evento involucrado, para mostrarlo en la tarjeta ya
-    // que ahora las solicitudes pueden ser de eventos distintos.
-    const eventoIds = [...new Set(compras.map(s=>s.evento_id).filter(Boolean))];
-    let nombresPorEvento = {};
-    if(eventoIds.length){
-      try{
-        const {data} = await sb.from('eventos').select('id,nombre').in('id', eventoIds);
-        (data||[]).forEach(e=>{ nombresPorEvento[e.id] = e.nombre; });
-      }catch(e){ /* si falla, simplemente no se muestra el nombre del evento */ }
-    }
+    if(!compras.length){ box.innerHTML = `<div class="card"><p class="hint">Aún no hay solicitudes de compra para este evento.</p></div>`; return; }
     box.innerHTML = compras.map(s=>{
       const items = (s.items||[]).map(it=>`${escapeHtml(it.ubicacion_detalle||it.zona)} · ${money(it.precio)}`).join('<br>');
       const badge = s.estado==='aprobada' ? '<span class="badge ok">Aprobada</span>' : s.estado==='rechazada' ? '<span class="badge bad">Rechazada</span>' : '<span class="badge warn">Pendiente</span>';
-      const evNombre = nombresPorEvento[s.evento_id] || '';
       return `<div class="stat" style="margin-bottom:12px;">
         <div class="row" style="justify-content:space-between; align-items:flex-start; flex-wrap:wrap;">
           <div>
             <b>${escapeHtml(s.nombre)}</b> ${badge}${s.vt_usuario ? ` <span class="badge">Vendedor: ${escapeHtml(s.vt_usuario)}</span>` : ''}<br>
-            ${evNombre ? `<span class="hint" style="color:var(--cyan);">${escapeHtml(evNombre)}</span><br>` : ''}
             <span class="hint">${escapeHtml(s.correo)} · ${escapeHtml(s.cedula)} · ${escapeHtml(s.telefono||'')}</span>
             <div class="hint" style="margin-top:6px;">${items}</div>
             <div><b>Total: ${money(s.total)}</b></div>
@@ -5052,11 +5134,9 @@ const AdminApp = {
     const sol = (this._recibosPagoCache||[]).find(s=>s.id===id);
     if(!sol){ toast('Solicitud no encontrada', true); return; }
     toast('Generando recibo de pago…');
-    try{
-      const url = await generarReciboPagoBold(sol);
-      if(url){ toast('Recibo de pago generado'); this.renderRecibosPago(); }
-      else toast('No se pudo generar el recibo de pago', true);
-    }catch(e){ console.error(e); toast('No se pudo generar el recibo: '+(e.message||e), true); }
+    const url = await generarReciboPagoBold(sol);
+    if(url){ toast('Recibo de pago generado'); this.renderRecibosPago(); }
+    else toast('No se pudo generar el recibo de pago', true);
   },
 
   /* ---------- Edición manual de una solicitud antes de aprobarla ---------- */
@@ -5160,7 +5240,6 @@ const AdminApp = {
     if(sol.metodo_pago==='bold'){ toast('Las compras pagadas con Bold se confirman automáticamente mediante el webhook.'); return; }
     const rows = (sol.items||[]).map(it=>({
       evento_id: sol.evento_id,
-      solicitud_compra_id: sol.id,
       codigo: genCode('TK'),
       codigo_validacion: genCode('VAL'),
       categoria: it.categoria || it.zona,
