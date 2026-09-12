@@ -1165,6 +1165,29 @@ function toast(msg, err){
   setTimeout(()=>{ el.remove(); }, 4200);
 }
 function money(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
+/* Copia cualquier texto (por ejemplo el UUID del evento) al portapapeles.
+   Usa la Clipboard API moderna y cae a un <textarea> temporal si el
+   navegador/contexto no la permite (http sin TLS, permisos, etc). */
+async function copiarTexto(texto, mensaje){
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(texto);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = texto;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    toast(mensaje || 'Copiado al portapapeles');
+  }catch(e){
+    console.error(e);
+    toast('No se pudo copiar: '+e.message, true);
+  }
+}
 /* ---------- Exportar / Importar evento (CSV) ----------
    Permite descargar toda la configuración de un evento (nombre, fecha,
    hora, estado, imagen y el objeto "mapa" con pisos/palcos/VIP/general/
@@ -4436,6 +4459,10 @@ const AdminApp = {
         <div>
           <b style="font-size:18px;">${escapeHtml(e.nombre)}</b>
           <div class="hint mono">${e.codigo} · ${e.fecha||'sin fecha'} ${e.hora||''}</div>
+          <div class="hint mono" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span>ID: ${e.id}</span>
+            <button type="button" class="btn btn-sm" style="padding:2px 8px; font-size:12px;" onclick="copiarTexto('${e.id}','ID del evento copiado')">📋 Copiar ID</button>
+          </div>
           <span class="badge ${e.estado==='activo'?'ok':'bad'}">${e.estado}</span>
           ${this.evento && this.evento.id===e.id ? '<span class="badge neutral">seleccionado</span>':''}
         </div>
