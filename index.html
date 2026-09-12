@@ -1165,29 +1165,6 @@ function toast(msg, err){
   setTimeout(()=>{ el.remove(); }, 4200);
 }
 function money(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
-/* Copia cualquier texto (por ejemplo el UUID del evento) al portapapeles.
-   Usa la Clipboard API moderna y cae a un <textarea> temporal si el
-   navegador/contexto no la permite (http sin TLS, permisos, etc). */
-async function copiarTexto(texto, mensaje){
-  try{
-    if(navigator.clipboard && window.isSecureContext){
-      await navigator.clipboard.writeText(texto);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = texto;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.focus(); ta.select();
-      document.execCommand('copy');
-      ta.remove();
-    }
-    toast(mensaje || 'Copiado al portapapeles');
-  }catch(e){
-    console.error(e);
-    toast('No se pudo copiar: '+e.message, true);
-  }
-}
 /* ---------- Exportar / Importar evento (CSV) ----------
    Permite descargar toda la configuración de un evento (nombre, fecha,
    hora, estado, imagen y el objeto "mapa" con pisos/palcos/VIP/general/
@@ -2255,7 +2232,51 @@ const Seats = {
   },
   async all(eventoId){
     const {data} = await sb.from('asientos').select('*').eq('evento_id', eventoId);
-    return data || [];
+    const asientos = data || [];
+    await this.reconciliarConTickets(eventoId, asientos);
+    return asientos;
+  },
+  // Corrige asientos que quedaron marcados como libres aunque ya existe un
+  // ticket vendido para esa ubicación (por ejemplo, ventas importadas o
+  // sincronizadas desde la app local, que insertan directamente en "tickets"
+  // sin pasar por Seats.occupy()). Cruza cada ticket activo del evento contra
+  // los asientos por número y, si encuentra una coincidencia sin marcar, la
+  // corrige tanto en el arreglo que se va a mostrar como en la base de datos,
+  // para que el mapa deje de ofrecer ese puesto como disponible.
+  async reconciliarConTickets(eventoId, asientos){
+    if(!asientos.length) return;
+    const {data: tickets} = await sb.from('tickets').select('id,zona,ubicacion_tipo,ubicacion_detalle,estado').eq('evento_id', eventoId).neq('estado','anulado');
+    if(!tickets || !tickets.length) return;
+    const porNumero = {};
+    asientos.forEach(a=>{ porNumero[a.numero] = a; });
+    const numeroDesdeTicket = (t) => {
+      const zona = (t.ubicacion_tipo||'').toLowerCase();
+      const det = (t.ubicacion_detalle||'').trim();
+      if(!det) return null;
+      // Caso 1: el detalle ya es el número crudo del asiento (ej. "P3-S1", "VIP1-S2", "G4")
+      if(porNumero[det]) return det;
+      // Caso 2: etiqueta humana "Palco N · Silla SX" / "VIP N · Silla SX" / "General · GX" / "Categoría · X"
+      const partes = det.split('·').map(s=>s.trim());
+      if(partes.length===2){
+        const num = partes[1].replace(/^Silla\s*/i,'').trim();
+        if(zona==='palco'){ const n = partes[0].replace(/^Palco\s*/i,'').trim(); return `P${n}-${num}`; }
+        if(zona==='vip'){ const n = partes[0].replace(/^VIP\s*/i,'').trim(); return n ? `VIP${n}-${num}` : num; }
+        return num; // general y categorías personalizadas usan el número tal cual
+      }
+      return null;
+    };
+    const updates = [];
+    tickets.forEach(t=>{
+      const numero = numeroDesdeTicket(t);
+      if(!numero) return;
+      const asiento = porNumero[numero];
+      if(asiento && !asiento.ocupado){
+        asiento.ocupado = true;
+        asiento.ticket_id = asiento.ticket_id || t.id;
+        updates.push(sb.from('asientos').update({ocupado:true, ticket_id:t.id}).eq('id', asiento.id).eq('ocupado', false));
+      }
+    });
+    if(updates.length) await Promise.all(updates).catch(()=>{});
   },
   // Asegura que existan al menos "cantidad" asientos libres en la zona indicada,
   // creando nuevos asientos numerados si hacen falta, y devuelve esa cantidad de
@@ -4459,10 +4480,6 @@ const AdminApp = {
         <div>
           <b style="font-size:18px;">${escapeHtml(e.nombre)}</b>
           <div class="hint mono">${e.codigo} · ${e.fecha||'sin fecha'} ${e.hora||''}</div>
-          <div class="hint mono" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            <span>ID: ${e.id}</span>
-            <button type="button" class="btn btn-sm" style="padding:2px 8px; font-size:12px;" onclick="copiarTexto('${e.id}','ID del evento copiado')">📋 Copiar ID</button>
-          </div>
           <span class="badge ${e.estado==='activo'?'ok':'bad'}">${e.estado}</span>
           ${this.evento && this.evento.id===e.id ? '<span class="badge neutral">seleccionado</span>':''}
         </div>
