@@ -1165,6 +1165,29 @@ function toast(msg, err){
   setTimeout(()=>{ el.remove(); }, 4200);
 }
 function money(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
+/* Copia cualquier texto (por ejemplo el UUID del evento) al portapapeles.
+   Usa la Clipboard API moderna y cae a un <textarea> temporal si el
+   navegador/contexto no la permite (http sin TLS, permisos, etc). */
+async function copiarTexto(texto, mensaje){
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(texto);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = texto;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    toast(mensaje || 'Copiado al portapapeles');
+  }catch(e){
+    console.error(e);
+    toast('No se pudo copiar: '+e.message, true);
+  }
+}
 /* ---------- Exportar / Importar evento (CSV) ----------
    Permite descargar toda la configuración de un evento (nombre, fecha,
    hora, estado, imagen y el objeto "mapa" con pisos/palcos/VIP/general/
@@ -4501,12 +4524,19 @@ const AdminApp = {
     const list = document.getElementById('evList');
     if(!this.eventos.length){ list.innerHTML = `<p class="hint">Aún no has creado eventos.</p>`; return; }
     list.innerHTML = this.eventos.map(e=>`
-      <div class="stat" style="margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
-        <div>
+      <div class="stat" style="margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:220px;">
           <b style="font-size:18px;">${escapeHtml(e.nombre)}</b>
           <div class="hint mono">${e.codigo} · ${e.fecha||'sin fecha'} ${e.hora||''}</div>
           <span class="badge ${e.estado==='activo'?'ok':'bad'}">${e.estado}</span>
           ${this.evento && this.evento.id===e.id ? '<span class="badge neutral">seleccionado</span>':''}
+          <div style="margin-top:10px; padding:10px 12px; border:1px dashed var(--line); border-radius:10px; background:var(--bg-soft, rgba(255,255,255,0.03));">
+            <div class="hint" style="margin-bottom:4px;">ID del evento (para el servidor local)</div>
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <code style="font-size:16px; font-weight:700; word-break:break-all; user-select:all;">${e.id}</code>
+              <button type="button" class="btn btn-sm btn-primary" onclick="copiarTexto('${e.id}','ID del evento copiado')">📋 Copiar ID</button>
+            </div>
+          </div>
         </div>
         <div class="row" style="flex-wrap:wrap;">
           <button class="btn btn-sm" onclick="AdminApp.selectEvento('${e.id}')">Seleccionar</button>
