@@ -2243,6 +2243,72 @@ const Seats = {
     });
     if(rows.length) await sb.from('asientos').insert(rows);
   },
+  // Detecta y borra "ubicaciones fantasma": filas de la tabla "asientos" que
+  // quedaron guardadas en Supabase pero que ya NO corresponden a la
+  // configuración actual del "mapa" del evento (por ejemplo, sillas de un
+  // palco/VIP/categoría que se creó por error o de una versión anterior del
+  // evento). Como TODAS las pantallas (admin, cliente, vendedor, taquilla)
+  // leen los asientos con Seats.all(), una fila huérfana se ve como una
+  // ubicación real en cualquier usuario aunque el admin nunca la pidió.
+  // Por seguridad, solo se borran asientos LIBRES (ocupado=false): un puesto
+  // ya vendido/ocupado nunca se toca, aunque haya quedado fuera del mapa
+  // actual, para no romper tickets ya emitidos.
+  async detectarFantasmas(eventoId){
+    const {data: eventoRows} = await sb.from('eventos').select('mapa').eq('id', eventoId).limit(1);
+    const mapa = (eventoRows && eventoRows[0] && eventoRows[0].mapa) || {};
+    const sillasPalco = Number(mapa.sillasPalco)||8;
+    const sillasVip = Number(mapa.sillasVip)||8;
+    const totalPalcos = Number(mapa.palcos)||0;
+    const totalVip = Number(mapa.vipUbicaciones)||0;
+    const totalGeneral = Number(mapa.general)||0;
+    const categoriasValidas = {};
+    (mapa.categorias||[]).forEach(c=>{ categoriasValidas[c.id] = Number(c.cantidad)||0; });
+    const {data} = await sb.from('asientos').select('*').eq('evento_id', eventoId);
+    const asientos = data || [];
+    const esValido = (a)=>{
+      if(a.zona==='palco'){
+        const [pKey, sKey] = a.numero.split('-');
+        const p = parseInt((pKey||'').replace('P',''),10);
+        const s = parseInt((sKey||'').replace('S',''),10);
+        return p>=1 && p<=totalPalcos && s>=1 && s<=sillasPalco;
+      }
+      if(a.zona==='vip'){
+        if(!a.numero.includes('-')) return true; // VIP plano de formato antiguo: se respeta siempre
+        const [vKey, sKey] = a.numero.split('-');
+        const v = parseInt((vKey||'').replace('VIP',''),10);
+        const s = parseInt((sKey||'').replace('S',''),10);
+        return v>=1 && v<=totalVip && s>=1 && s<=sillasVip;
+      }
+      if(a.zona==='general'){
+        const g = parseInt((a.numero||'').replace('G',''),10);
+        return g>=1 && g<=totalGeneral;
+      }
+      // Categoría personalizada: la zona debe existir en mapa.categorias y el
+      // número de puesto no debe superar la cantidad configurada.
+      if(Object.prototype.hasOwnProperty.call(categoriasValidas, a.zona)){
+        const n = parseInt((a.numero||'').split('-').pop(),10);
+        return n>=1 && n<=categoriasValidas[a.zona];
+      }
+      // Zona que ya no existe en mapa.categorias en absoluto: fantasma.
+      return false;
+    };
+    const fantasmas = asientos.filter(a=> !esValido(a));
+    const libres = fantasmas.filter(a=> !a.ocupado);
+    const ocupados = fantasmas.filter(a=> a.ocupado);
+    return {libres, ocupados};
+  },
+  async limpiarFantasmas(eventoId){
+    const {libres, ocupados} = await this.detectarFantasmas(eventoId);
+    if(libres.length){
+      const ids = libres.map(a=>a.id);
+      // Supabase .in() soporta muchos ids, pero se envía en lotes por si el
+      // evento tiene demasiados asientos huérfanos acumulados.
+      for(let i=0;i<ids.length;i+=500){
+        await sb.from('asientos').delete().in('id', ids.slice(i,i+500));
+      }
+    }
+    return {eliminados: libres.length, ocupadosOmitidos: ocupados.length};
+  },
   async free(eventoId, zona, palco){
     let q = sb.from('asientos').select('*').eq('evento_id',eventoId).eq('zona',zona).eq('ocupado',false).order('numero').limit(80);
     const {data,error} = await q;
@@ -4544,6 +4610,7 @@ const AdminApp = {
           <button class="btn btn-sm" onclick="AdminApp.openAjustarMapa('${e.id}')">Ajustar palcos/VIP</button>
           <button class="btn btn-sm" onclick="AdminApp.configurarPago('${e.id}')">Config. de pago</button>
           <button class="btn btn-sm" onclick="AdminApp.exportarEvento('${e.id}')">⬇️ Exportar</button>
+          <button class="btn btn-sm" onclick="AdminApp.limpiarFantasmas('${e.id}')">🧹 Limpiar ubicaciones fantasma</button>
         </div>
         <div id="mapaEdit-${e.id}" class="hide" style="margin-top:10px; border-top:1px dashed var(--line); padding-top:10px;">
           <div class="field">
@@ -5023,6 +5090,40 @@ const AdminApp = {
     const csv = csvBuildRow(headers) + '\r\n' + csvBuildRow(fila) + '\r\n';
     descargarArchivo('evento_'+(e.codigo||e.id)+'.csv', csv);
     toast('Evento exportado. Usa "Importar evento" en la otra plataforma para crearlo allá.');
+  },
+  /* Revisa la tabla "asientos" del evento contra la configuración actual del
+     "mapa" (pisos/palcos/VIP/general/categorías) y borra las filas que ya no
+     corresponden a nada configurado por el admin ("ubicaciones fantasma").
+     Solo borra puestos LIBRES; si encuentra alguno ocupado/vendido fuera de
+     la config actual, lo deja intacto y avisa para que el admin decida a
+     mano (ajustando el mapa en vez de perder un ticket ya emitido). */
+  async limpiarFantasmas(id){
+    const e = this.eventos.find(x=>x.id===id);
+    if(!e){ toast('Evento no encontrado', true); return; }
+    toast('Revisando ubicaciones de "'+e.nombre+'"…');
+    let resumen;
+    try{ resumen = await Seats.detectarFantasmas(id); }
+    catch(err){ console.error(err); toast('No se pudo revisar el evento: '+err.message, true); return; }
+    const {libres, ocupados} = resumen;
+    if(!libres.length && !ocupados.length){
+      toast('No se encontraron ubicaciones fantasma en este evento.');
+      return;
+    }
+    const detalle = libres.length
+      ? `Se encontraron ${libres.length} puesto(s) libres que ya no están en la configuración actual del mapa. ¿Borrarlos?`
+      : 'No hay puestos libres para borrar.';
+    if(libres.length && !confirm(detalle)){ toast('Limpieza cancelada'); return; }
+    let out = {eliminados:0, ocupadosOmitidos: ocupados.length};
+    if(libres.length){
+      try{ out = await Seats.limpiarFantasmas(id); }
+      catch(err){ console.error(err); toast('Error borrando ubicaciones fantasma: '+err.message, true); return; }
+    }
+    if(out.ocupadosOmitidos>0){
+      toast(`Se borraron ${out.eliminados} ubicación(es) fantasma. ${out.ocupadosOmitidos} estaban ocupadas y NO se tocaron (tienen ticket asignado); ajusta el mapa si quieres incluirlas oficialmente.`, out.eliminados===0);
+    } else {
+      toast(out.eliminados>0 ? `Se borraron ${out.eliminados} ubicación(es) fantasma.` : 'No había ubicaciones fantasma libres para borrar.');
+    }
+    if(this.evento && this.evento.id===id) await Seats.all(id); // refresca reconciliación por si algo cambió
   },
   /* Lee el .csv generado por "exportarEvento" y crea un evento nuevo (con
      código propio) igual al original: mismo nombre, fecha, hora y "mapa"
