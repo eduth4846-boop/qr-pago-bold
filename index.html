@@ -3851,6 +3851,18 @@ const UsuarioApp = {
   eventoActual(){
     return this.evento || (this.compra && this.compra.evento) || null;
   },
+  // Identidad para la wallet del cliente: si ya pasó por "Comprar tickets"
+  // usa esos datos (this.compra.comprador); si no, y entró por el login
+  // simple de correo/cédula (this.tickets, desde "Mis tickets"), arma el
+  // mismo objeto {nombre, cedula, correo, telefono} a partir de su primer
+  // ticket. Así "Mi Wallet" funciona apenas inicia sesión, sin obligarlo a
+  // llenar el formulario de compra solo para ver su saldo.
+  identidadWallet(){
+    if(this.compra && this.compra.comprador) return this.compra.comprador;
+    const t = this.tickets && this.tickets[0];
+    if(t && (t.correo || t.cedula)) return {nombre:t.nombre_cliente, cedula:t.cedula, correo:t.correo, telefono:t.telefono};
+    return null;
+  },
   actualizarWalletTab(){
     const btn = document.getElementById('uWalletTabBtn');
     const evento = this.eventoActual();
@@ -7230,7 +7242,7 @@ const WalletKit = {
   // transferencia, pero el vendedor la ve y la aprueba desde su propia
   // pestaña "Recarga en taquilla" al recibir el efectivo en mano.
   async solicitarTaquilla(){
-    const comprador = UsuarioApp.compra && UsuarioApp.compra.comprador;
+    const comprador = UsuarioApp.identidadWallet();
     const evento = UsuarioApp.eventoActual();
     const monto = Number(document.getElementById('wcMonto').value);
     if(!comprador || !comprador.correo){ toast('Completa tus datos primero', true); return; }
@@ -7329,7 +7341,7 @@ const WalletKit = {
 
   /* ---------- recarga por el propio cliente (UsuarioApp) ---------- */
   abrirRecargaCliente(){
-    const comprador = (UsuarioApp.compra && UsuarioApp.compra.comprador) || null;
+    const comprador = UsuarioApp.identidadWallet();
     if(!comprador || !comprador.correo){ toast('Necesitamos tus datos (nombre, cédula, correo, teléfono) antes de recargar. Ve a "Comprar tickets" para completarlos.', true); return; }
     const evento = UsuarioApp.eventoActual();
     document.body.insertAdjacentHTML('beforeend', `
@@ -7357,7 +7369,7 @@ const WalletKit = {
       </div>`);
   },
   async pagarConBoldCliente(){
-    const comprador = UsuarioApp.compra.comprador;
+    const comprador = UsuarioApp.identidadWallet();
     const evento = UsuarioApp.eventoActual();
     const monto = Number(document.getElementById('wcMonto').value);
     if(!monto || monto<1000){ toast('Ingresa un monto válido (mínimo $1.000)', true); return; }
@@ -7411,7 +7423,7 @@ const WalletKit = {
     }
   },
   async enviarComprobanteCliente(){
-    const comprador = UsuarioApp.compra.comprador;
+    const comprador = UsuarioApp.identidadWallet();
     const evento = UsuarioApp.eventoActual();
     const monto = Number(document.getElementById('wcMonto').value);
     const fileInput = document.getElementById('wcComprobante');
@@ -7433,12 +7445,12 @@ const WalletKit = {
     const box = document.getElementById('u-wallet');
     if(!box) return;
     const evento = UsuarioApp.eventoActual();
-    const comprador = UsuarioApp.compra && UsuarioApp.compra.comprador;
+    const comprador = UsuarioApp.identidadWallet();
     if(!evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento desde "Mis tickets" para ver tu wallet.</p></div>`; return; }
     if(!evento.wallet_habilitada){ box.innerHTML = `<div class="card"><p class="hint">Este evento todavía no tiene la wallet habilitada.</p></div>`; return; }
-    if(!comprador || !comprador.correo){ box.innerHTML = `<div class="card"><p class="hint">Completa tus datos en "Comprar tickets" (nombre, cédula, correo, teléfono) para activar tu wallet.</p></div>`; return; }
+    if(!comprador || !(comprador.correo || comprador.cedula)){ box.innerHTML = `<div class="card"><p class="hint">Completa tus datos en "Comprar tickets" (nombre, cédula, correo, teléfono) para activar tu wallet.</p></div>`; return; }
     box.innerHTML = `<div class="hint" style="padding:20px;">Cargando tu wallet…</div>`;
-    const wallet = await this.getWalletByCorreo(evento.id, comprador.correo);
+    const wallet = await this.buscarWallet(evento.id, comprador.correo || comprador.cedula);
     const movs = wallet ? await this.getMovimientos(wallet.id, 60) : [];
     box.innerHTML = `
       <div style="max-width:480px; margin:0 auto 20px;">${this.cardHtml(wallet, evento, comprador)}</div>
