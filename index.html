@@ -2653,8 +2653,19 @@ const ClienteAuth = {
     try{
       const {data,error}=await sb.rpc('crear_cliente',{p_nombre:nombre,p_correo:email,p_password:password,p_cedula:cedula,p_telefono:telefono});
       if(error){
-        if(/duplicate|unique|ya existe|correo/i.test(error.message||'')) toast('Ya existe un cliente con ese correo. Inicia sesión.',true);
-        else toast('No se pudo crear la cuenta: '+error.message,true);
+        // OJO: antes se detectaba "ya existe" con un patrón que incluía la
+        // palabra suelta "correo", y esa palabra aparece en CASI cualquier
+        // error de este RPC (por ejemplo, cuando la función crear_cliente
+        // no existe todavía en Supabase, Postgres devuelve un mensaje del
+        // tipo "Could not find the function ... p_correo ..." que también
+        // hacía matchear el patrón). Eso mostraba "Ya existe un cliente con
+        // ese correo" aunque la tabla estuviera vacía. Ahora solo se asume
+        // duplicado con el código de Postgres para llave única (23505) o un
+        // mensaje que realmente hable de una violación de unicidad/duplicado.
+        const msg = error.message || '';
+        const esDuplicado = error.code === '23505' || /duplicate key value violates unique constraint|already exists/i.test(msg);
+        if(esDuplicado) toast('Ya existe un cliente con ese correo. Inicia sesión.',true);
+        else toast('No se pudo crear la cuenta: '+msg,true);
         return;
       }
       const customer=data&&data[0]; if(!customer){toast('No se pudo crear la cuenta',true);return;}
