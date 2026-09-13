@@ -4097,19 +4097,16 @@ const UsuarioApp = {
     toast('Selecciona un evento para continuar como cliente.');
   },
   // Se llama al hacer clic en un evento del slider de publicidad (banner):
-  // muestra el login por correo/cédula (o código VAL) para que, si la
-  // persona ya compró, entre directo a ver sus tickets, transferir,
-  // el mapa del evento y el chat/PQR. Si aún no tiene tickets, desde ahí
-  // mismo puede pasar a "Quiero comprar" (comprarEvento).
+  // ahora lleva directo al login/registro de cuenta de cliente (ClienteAuth)
+  // en vez de la búsqueda por correo/cédula. Al iniciar sesión, la
+  // validación se hace contra la tabla de clientes en Supabase (RPC
+  // validar_cliente) y trae los datos reales de ese cliente (nombre,
+  // cédula, teléfono, tickets) para continuar la compra o ver lo que ya
+  // tiene comprado.
   abrirLoginEvento(evento){
     this.evento = evento;
     renderEventPill(evento);
-    const info = document.getElementById('eventoLoginEvent');
-    if(info) info.innerHTML = evento ? `Evento seleccionado: <b>${escapeHtml(evento.nombre||'')}</b>` : '';
-    const lookup = document.getElementById('userLookup'); if(lookup) lookup.value = '';
-    const code = document.getElementById('userValCode'); if(code) code.value = '';
-    Router.go('login-evento');
-    setTimeout(()=>document.getElementById('userLookup')?.focus(), 40);
+    ClienteAuth.openForEvent(evento);
   },
   // Se llama al hacer clic en un evento del slider de publicidad: lleva
   // directo a la interfaz de compra de ese evento específico.
