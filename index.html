@@ -7632,8 +7632,11 @@ async function checkBoldReturnWallet(orderId){
     </div>`);
 
   let estado = 'pendiente_pago';
-  let acreditado = false;
 
+  // bold-verificar-pago ahora también sabe consultar wallet_recargas_bold
+  // (además de solicitudes_compra), así que basta con leer "estado" de su
+  // respuesta — igual que hace el flujo de compra de tickets — sin volver a
+  // consultar wallet_movimientos por separado desde aquí.
   for(let i=0;i<10;i++){
     try{
       const res = await fetch(EDGE_FUNCTIONS_URL + '/bold-verificar-pago?order_id=' + encodeURIComponent(orderId), {
@@ -7642,14 +7645,8 @@ async function checkBoldReturnWallet(orderId){
       const data = await res.json().catch(()=>({}));
       estado = data.estado || estado;
 
-      // La confirmación visible exige que el webhook ya haya corrido
-      // wallet_acreditar_bold (movimiento 'aprobada' con este order_id),
-      // igual que con tickets se exige que ya existan los tickets creados.
-      const {data: movRows} = await sb.from('wallet_movimientos').select('id,estado').eq('bold_order_id', orderId).eq('estado','aprobada').limit(1);
-      acreditado = !!(movRows && movRows[0]);
-
       if(estado==='rechazada') break;
-      if(estado==='aprobada' && acreditado) break;
+      if(estado==='aprobada') break;
     }catch(e){
       // Se sigue intentando porque el webhook de Bold puede llegar unos segundos después.
     }
@@ -7658,7 +7655,7 @@ async function checkBoldReturnWallet(orderId){
 
   const msg = document.getElementById('boldResultMsg');
   if(msg){
-    if(estado==='aprobada' && acreditado){
+    if(estado==='aprobada'){
       msg.innerHTML = '¡Pago confirmado! 🎉 Tu saldo ya quedó acreditado en tu wallet.';
       clearBoldOrder();
       // Si la persona sigue con su sesión de cliente en memoria, refrescamos
