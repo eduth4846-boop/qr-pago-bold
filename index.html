@@ -1070,14 +1070,22 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <span class="back" onclick="ClienteAuth.showLogin()">‹ volver al inicio de sesión</span>
         <div class="card client-auth-card">
           <div class="section-title"><h2>Recuperar contraseña</h2></div>
-          <p class="hint client-auth-subtitle">Usa el código de recuperación que recibiste al crear tu cuenta. No se usa correo ni proveedor externo.</p>
-          <form onsubmit="event.preventDefault(); ClienteAuth.recover();">
-            <div class="field"><label>Correo electrónico</label><input id="clientRecoveryEmail" type="email" autocomplete="email" placeholder="correo@ejemplo.com" required></div>
-            <div class="field"><label>Código de recuperación</label><input id="clientRecoveryCode" type="text" autocomplete="one-time-code" placeholder="XXXXXXXX-XXXXXXXX" required></div>
-            <div class="field"><label>Nueva contraseña</label><input id="clientRecoveryPassword" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres" required></div>
-            <div class="field"><label>Confirmar contraseña</label><input id="clientRecoveryPassword2" type="password" autocomplete="new-password" placeholder="Repite tu contraseña" required></div>
-            <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn" type="submit">Cambiar contraseña</button>
-          </form>
+          <div id="recoveryStep1">
+            <p class="hint client-auth-subtitle">Usa el código de recuperación que recibiste al crear tu cuenta. No se usa correo ni proveedor externo.</p>
+            <form onsubmit="event.preventDefault(); ClienteAuth.recoverStep1();">
+              <div class="field"><label>Correo electrónico</label><input id="clientRecoveryEmail" type="email" autocomplete="email" placeholder="correo@ejemplo.com" required></div>
+              <div class="field"><label>Código de recuperación</label><input id="clientRecoveryCode" type="text" autocomplete="one-time-code" placeholder="XXXXXXXX-XXXXXXXX" required></div>
+              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn" type="submit">Recuperar contraseña</button>
+            </form>
+          </div>
+          <div id="recoveryStep2" class="hide">
+            <p class="hint client-auth-subtitle">Ya generamos una contraseña temporal para tu cuenta. Por seguridad, define ahora tu contraseña definitiva.</p>
+            <form onsubmit="event.preventDefault(); ClienteAuth.recoverStep2();">
+              <div class="field"><label>Nueva contraseña</label><input id="clientRecoveryPassword" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres" required></div>
+              <div class="field"><label>Confirmar contraseña</label><input id="clientRecoveryPassword2" type="password" autocomplete="new-password" placeholder="Repite tu contraseña" required></div>
+              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn2" type="submit">Guardar contraseña definitiva</button>
+            </form>
+          </div>
         </div>
       </div>
     </section>
@@ -2501,6 +2509,7 @@ const ClienteAuth = {
   pendingEvento: null,
   pendingCustomer: null,
   pendingRecoveryCode: null,
+  _recoveryEmail: null,
 
   setPendingEvento(evento){
     this.pendingEvento = evento || null;
@@ -2565,7 +2574,41 @@ const ClienteAuth = {
   showRecovery(){
     const loginEmail=document.getElementById('clientEmail')?.value?.trim()||'';
     const recoveryEmail=document.getElementById('clientRecoveryEmail'); if(recoveryEmail&&loginEmail) recoveryEmail.value=loginEmail;
+    // Siempre se entra por el paso 1 (correo + código); el paso 2 (definir
+    // contraseña definitiva) solo aparece después de validar el código.
+    document.getElementById('recoveryStep1')?.classList.remove('hide');
+    document.getElementById('recoveryStep2')?.classList.add('hide');
+    const p1=document.getElementById('clientRecoveryPassword'); if(p1) p1.value='';
+    const p2=document.getElementById('clientRecoveryPassword2'); if(p2) p2.value='';
     Router.go('login-cliente-recovery'); setTimeout(()=>document.getElementById('clientRecoveryEmail')?.focus(),40);
+  },
+  // Genera una contraseña temporal legible (evita caracteres ambiguos como
+  // 0/O o 1/I/l) para mostrarla en la ventana emergente del paso 1.
+  _generarPasswordTemporal(){
+    const alfabeto='ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let pass='';
+    for(let i=0;i<10;i++) pass+=alfabeto[Math.floor(Math.random()*alfabeto.length)];
+    return pass;
+  },
+  // Muestra la contraseña temporal en una ventana emergente y, al cerrarla,
+  // deja al usuario en el paso 2 (definir su contraseña definitiva). No hay
+  // forma de continuar sin pasar por ahí: se obliga a cambiarla de una vez.
+  _mostrarPasswordTemporalModal(passTemporal){
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="recoveryTempPassModal">
+        <div class="modal" style="max-width:420px; text-align:center;">
+          <div class="section-title" style="justify-content:center;"><h2 style="font-size:19px;">🔑 Contraseña temporal</h2></div>
+          <p class="hint">Ya puedes ingresar con esta contraseña temporal. Por seguridad debes reemplazarla ahora mismo por una definitiva.</p>
+          <p class="client-recovery-code" style="margin:14px 0;">${escapeHtml(passTemporal)}</p>
+          <button class="btn btn-primary btn-block btn-lg" type="button" onclick="ClienteAuth._cerrarPasswordTemporalModal()">Entendido, elegir mi contraseña</button>
+        </div>
+      </div>`);
+  },
+  _cerrarPasswordTemporalModal(){
+    document.getElementById('recoveryTempPassModal')?.remove();
+    document.getElementById('recoveryStep1')?.classList.add('hide');
+    document.getElementById('recoveryStep2')?.classList.remove('hide');
+    setTimeout(()=>document.getElementById('clientRecoveryPassword')?.focus(),40);
   },
   backToEventOrLanding(){
     const evt=this.pendingEvento; Router.go('landing');
@@ -2628,23 +2671,49 @@ const ClienteAuth = {
       Router.go('login-cliente-created');
     }finally{if(btn){btn.disabled=false;btn.textContent='Crear cuenta';}}
   },
-  async recover(){
+  // Paso 1: valida correo + código de recuperación y, si son correctos,
+  // ya deja la cuenta con una contraseña temporal (generada acá mismo) que
+  // se muestra en una ventana emergente. No se pide la contraseña nueva
+  // todavía: eso ocurre en el paso 2, de forma obligatoria.
+  async recoverStep1(){
     const email=document.getElementById('clientRecoveryEmail').value.trim().toLowerCase();
+    const code=document.getElementById('clientRecoveryCode').value.trim().toUpperCase();
+    if(!email||!code){toast('Completa correo y código de recuperación',true);return;}
+    const btn=document.getElementById('clientRecoveryBtn'); if(btn){btn.disabled=true;btn.textContent='Validando...';}
+    try{
+      const passTemporal=this._generarPasswordTemporal();
+      const {data,error}=await sb.rpc('recuperar_cliente',{p_correo:email,p_codigo:code,p_nueva_password:passTemporal});
+      if(error){toast('No se pudo validar el código: '+error.message,true);return;}
+      const customer=data&&data[0]; if(!customer){toast('Correo o código de recuperación incorrectos.',true);return;}
+      this.pendingCustomer=customer;
+      this._recoveryEmail=email;
+      this._mostrarPasswordTemporalModal(passTemporal);
+    }finally{if(btn){btn.disabled=false;btn.textContent='Recuperar contraseña';}}
+  },
+  // Paso 2: obligatorio antes de poder usar la cuenta de nuevo. Reutiliza
+  // el mismo código de recuperación (sigue siendo válido) para dejar ya la
+  // contraseña definitiva que eligió el usuario.
+  async recoverStep2(){
+    const email=this._recoveryEmail;
     const code=document.getElementById('clientRecoveryCode').value.trim().toUpperCase();
     const p1=document.getElementById('clientRecoveryPassword').value;
     const p2=document.getElementById('clientRecoveryPassword2').value;
-    if(!email||!code||!p1||!p2){toast('Completa todos los campos',true);return;}
+    if(!email||!code){toast('Vuelve a solicitar el código de recuperación',true); this.showRecovery(); return;}
+    if(!p1||!p2){toast('Completa todos los campos',true);return;}
     if(p1.length<6){toast('La contraseña debe tener al menos 6 caracteres',true);return;}
     if(p1!==p2){toast('Las contraseñas no coinciden',true);return;}
-    const btn=document.getElementById('clientRecoveryBtn'); if(btn){btn.disabled=true;btn.textContent='Validando...';}
+    const btn=document.getElementById('clientRecoveryBtn2'); if(btn){btn.disabled=true;btn.textContent='Guardando...';}
     try{
       const {data,error}=await sb.rpc('recuperar_cliente',{p_correo:email,p_codigo:code,p_nueva_password:p1});
       if(error){toast('No se pudo actualizar la contraseña: '+error.message,true);return;}
-      const customer=data&&data[0]; if(!customer){toast('Correo o código de recuperación incorrectos.',true);return;}
+      const customer=data&&data[0]; if(!customer){toast('No se pudo actualizar la contraseña, intenta de nuevo.',true);return;}
       toast('Contraseña actualizada correctamente.');
+      this._recoveryEmail=null;
+      // Mantiene el formulario normal de correo/contraseña para que el
+      // usuario inicie sesión ya con su contraseña definitiva.
       document.getElementById('clientEmail').value=email; document.getElementById('clientPassword').value='';
       this.pendingCustomer=customer; this.showLogin();
-    }finally{if(btn){btn.disabled=false;btn.textContent='Cambiar contraseña';}}
+    }finally{if(btn){btn.disabled=false;btn.textContent='Guardar contraseña definitiva';}}
   },
   finishRegistration(){
     const evento=this.pendingEvento, customer=this.pendingCustomer;
@@ -7829,8 +7898,9 @@ const WalletKit = {
     if(!evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento desde "Mis tickets" para ver tu wallet.</p></div>`; return; }
     if(!evento.wallet_habilitada){ box.innerHTML = `<div class="card"><p class="hint">Este evento todavía no tiene la wallet habilitada.</p></div>`; return; }
     if(!comprador || !(comprador.correo || comprador.cedula)){ box.innerHTML = `<div class="card"><p class="hint">Completa tus datos en "Comprar tickets" (nombre, cédula, correo, teléfono) para activar tu wallet.</p></div>`; return; }
-    box.innerHTML = `<div class="hint" style="padding:20px;">Verificando tu identidad…</div>`;
-    if(!(await this.kycVerificado())){ box.innerHTML = this.gateHtml(); return; }
+    // La verificación KYC obligatoria quedó solo para cuentas nuevas (ver
+    // ClienteAuth.needsKycGate en login/registro): una vez el cliente ya
+    // entró a su cuenta, puede ver y mover su wallet sin repetir el gate.
     box.innerHTML = `<div class="hint" style="padding:20px;">Cargando tu wallet…</div>`;
     const wallet = await this.buscarWallet(evento.id, comprador.correo || comprador.cedula);
     const movs = wallet ? await this.getMovimientos(wallet.id, 60) : [];
