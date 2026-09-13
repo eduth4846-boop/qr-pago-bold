@@ -921,11 +921,16 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
             </div>
             <button class="btn btn-primary btn-block btn-lg" id="clientLoginBtn" type="submit">Ingresar</button>
           </form>
+          <div id="clientBiometricWrap" style="display:none; margin-top:14px;">
+            <p class="hint" style="text-align:center; margin:14px 0 6px;">o, si ya la activaste en este dispositivo</p>
+            <button class="btn btn-ghost btn-block" type="button" id="btnClienteHuella" onclick="BiometricAuth.loginWithBiometric()">🔒 <span id="bioLoginLabel">Ingresar con huella / Face ID</span></button>
+            <button class="client-auth-link" type="button" onclick="BiometricAuth.forgetAndRefresh()">¿No eres tú? Olvidar huella en este dispositivo</button>
+          </div>
           <div class="client-auth-actions">
             <button class="client-auth-link" type="button" onclick="ClienteAuth.showRecovery()">¿Olvidaste tu contraseña?</button>
             <button class="client-auth-new" type="button" onclick="ClienteAuth.showRegister()">Soy cliente nuevo</button>
           </div>
-          <div class="client-auth-note">Tu acceso se usa únicamente para la experiencia de cliente.</div>
+          <div class="client-auth-note">Tu acceso se usa únicamente para la experiencia de cliente. La huella o Face ID solo se usa para desbloquear el acceso guardado en este dispositivo; nunca se envía a nuestros servidores.</div>
         </div>
       </div>
     </section>
@@ -1972,6 +1977,172 @@ const Router = {
    Flujo público: evento -> login cliente -> compras del evento.
 ========================================================= */
 const CLIENT_PENDING_EVENT_KEY = 'cashless_pending_event_v1';
+
+/* =========================================================
+   HUELLA / FACE ID EN ESTE DISPOSITIVO (WebAuthn)
+   No hay backend propio para verificar firmas WebAuthn (solo Supabase
+   con RPCs), así que la huella se usa como "llave" local: al activarla
+   se registra un autenticador de plataforma (el mismo lector de huella
+   /Face ID que desbloquea el celular) y, si el navegador soporta la
+   extensión PRF, esa verificación deriva una clave que descifra el
+   correo+contraseña guardados SOLO en este dispositivo (localStorage).
+   Con eso se reenvía el login normal (validar_cliente) sin que la
+   persona tenga que volver a escribir su contraseña.
+   Si el navegador no soporta PRF, se avisa que la huella no está
+   disponible en ese equipo/navegador en vez de fingir seguridad.
+========================================================= */
+const BIOMETRIC_STORAGE_KEY = 'cashless_biometric_cred_v1';
+const BIOMETRIC_SALT = new Uint8Array([0x43,0x61,0x73,0x68,0x6c,0x65,0x73,0x73,0x2d,0x43,0x6f,0x6c,0x6f,0x6d,0x62,0x69,0x61,0x2d,0x62,0x69,0x6f,0x2d,0x76,0x31,0x2d,0x73,0x61,0x6c,0x74,0x21,0x21,0x21]);
+function bioBufToB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function bioB64ToBuf(b64){ const bin=atob(b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i); return arr.buffer; }
+const BiometricAuth = {
+  async isSupported(){
+    if(!window.isSecureContext || !window.PublicKeyCredential) return false;
+    try{ return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
+    catch(e){ return false; }
+  },
+  getStored(){
+    try{ return JSON.parse(localStorage.getItem(BIOMETRIC_STORAGE_KEY) || 'null'); }
+    catch(e){ return null; }
+  },
+  hasRegistered(){ return !!this.getStored(); },
+  forget(){
+    try{ localStorage.removeItem(BIOMETRIC_STORAGE_KEY); }catch(e){}
+  },
+  async deriveKey(prfBytes){
+    const baseKey = await crypto.subtle.importKey('raw', prfBytes, {name:'HKDF'}, false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      {name:'HKDF', hash:'SHA-256', salt:BIOMETRIC_SALT, info:new TextEncoder().encode('cashless-biometric-login')},
+      baseKey, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']
+    );
+  },
+  // Registra la huella/Face ID de este dispositivo y guarda las
+  // credenciales de acceso cifradas, solo si el navegador soporta la
+  // extensión PRF (cifrado real ligado al lector biométrico).
+  async register(correo, password){
+    if(!(await this.isSupported())){
+      toast('Este dispositivo o navegador no tiene huella/Face ID disponible.', true);
+      return false;
+    }
+    try{
+      const userId = crypto.getRandomValues(new Uint8Array(16));
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      const cred = await navigator.credentials.create({
+        publicKey:{
+          challenge, rp:{name:'Cashless Colombia'},
+          user:{id:userId, name:correo, displayName:correo},
+          pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
+          authenticatorSelection:{authenticatorAttachment:'platform', userVerification:'required', residentKey:'preferred'},
+          timeout:60000,
+          extensions:{prf:{eval:{first:BIOMETRIC_SALT}}}
+        }
+      });
+      if(!cred) throw new Error('No se pudo crear la credencial');
+      const ext = cred.getClientExtensionResults();
+      const prfResult = ext && ext.prf && ext.prf.results && ext.prf.results.first;
+      if(!prfResult){
+        toast('Este navegador registró la huella pero no soporta el cifrado necesario (PRF). Prueba con Chrome o Safari actualizados.', true);
+        return false;
+      }
+      const key = await this.deriveKey(prfResult);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const payload = new TextEncoder().encode(JSON.stringify({correo, password}));
+      const cipher = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, payload);
+      localStorage.setItem(BIOMETRIC_STORAGE_KEY, JSON.stringify({
+        correo: (correo||'').toLowerCase(),
+        credentialId: bioBufToB64(cred.rawId),
+        iv: bioBufToB64(iv),
+        data: bioBufToB64(cipher)
+      }));
+      toast('Huella activada en este dispositivo.');
+      return true;
+    }catch(e){
+      if(e && e.name==='NotAllowedError'){ toast('Activación de huella cancelada.', true); return false; }
+      toast('No se pudo activar la huella: '+(e && e.message ? e.message : e), true);
+      return false;
+    }
+  },
+  // Ofrece activar la huella justo después de un login exitoso con
+  // correo/contraseña, si este dispositivo aún no la tiene configurada.
+  async offerActivationAfterLogin(correo, password){
+    if(this.hasRegistered()) return;
+    if(!(await this.isSupported())) return;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="bioActivarModal">
+        <div class="modal">
+          <div class="section-title"><h2 style="font-size:19px;">¿Activar huella / Face ID?</h2></div>
+          <p class="hint">La próxima vez podrás ingresar en este dispositivo usando la misma huella o Face ID con la que lo desbloqueas, sin escribir tu contraseña.</p>
+          <div class="row" style="margin-top:14px;">
+            <button class="btn btn-ghost btn-block" type="button" onclick="document.getElementById('bioActivarModal').remove()">Ahora no</button>
+            <button class="btn btn-primary btn-block" type="button" id="bioActivarBtn">Activar huella</button>
+          </div>
+        </div>
+      </div>`);
+    const btn = document.getElementById('bioActivarBtn');
+    if(btn) btn.onclick = async ()=>{
+      btn.disabled = true; btn.textContent = 'Activando...';
+      const ok = await this.register(correo, password);
+      const m = document.getElementById('bioActivarModal'); if(m) m.remove();
+      if(ok) this.refreshLoginButton();
+    };
+  },
+  // Muestra u oculta el botón "Ingresar con huella" en la pantalla de
+  // login de cliente, según si este dispositivo ya tiene una huella
+  // registrada.
+  refreshLoginButton(){
+    const wrap = document.getElementById('clientBiometricWrap');
+    if(!wrap) return;
+    const stored = this.getStored();
+    if(stored){
+      wrap.style.display = '';
+      const label = document.getElementById('bioLoginLabel');
+      if(label) label.textContent = stored.correo ? ('Ingresar con huella (' + stored.correo + ')') : 'Ingresar con huella / Face ID';
+    }else{
+      wrap.style.display = 'none';
+    }
+  },
+  async loginWithBiometric(){
+    const stored = this.getStored();
+    if(!stored){ toast('No hay huella registrada en este dispositivo.', true); return; }
+    if(!(await this.isSupported())){ toast('La huella no está disponible en este dispositivo/navegador.', true); return; }
+    const btn = document.getElementById('btnClienteHuella');
+    if(btn){ btn.disabled = true; btn.textContent = 'Verificando huella...'; }
+    try{
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      const assertion = await navigator.credentials.get({
+        publicKey:{
+          challenge,
+          allowCredentials:[{id:bioB64ToBuf(stored.credentialId), type:'public-key'}],
+          userVerification:'required',
+          timeout:60000,
+          extensions:{prf:{eval:{first:BIOMETRIC_SALT}}}
+        }
+      });
+      const ext = assertion.getClientExtensionResults();
+      const prfResult = ext && ext.prf && ext.prf.results && ext.prf.results.first;
+      if(!prfResult){ toast('No se pudo verificar la huella en este dispositivo.', true); return; }
+      const key = await this.deriveKey(prfResult);
+      const plain = await crypto.subtle.decrypt({name:'AES-GCM', iv:bioB64ToBuf(stored.iv)}, key, bioB64ToBuf(stored.data));
+      const {correo, password} = JSON.parse(new TextDecoder().decode(plain));
+      const emailEl = document.getElementById('clientEmail');
+      const passEl = document.getElementById('clientPassword');
+      if(emailEl) emailEl.value = correo;
+      if(passEl) passEl.value = password;
+      await ClienteAuth.login();
+    }catch(e){
+      if(e && e.name==='NotAllowedError'){ toast('Verificación de huella cancelada.', true); }
+      else{ toast('No se pudo ingresar con huella: '+(e && e.message ? e.message : e), true); }
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = ''; this.refreshLoginButton(); }
+    }
+  },
+  forgetAndRefresh(){
+    this.forget();
+    toast('Se olvidó la huella en este dispositivo.');
+    this.refreshLoginButton();
+  }
+};
+
 const ClienteAuth = {
   pendingEvento: null,
   pendingCustomer: null,
@@ -2005,6 +2176,7 @@ const ClienteAuth = {
     const email=document.getElementById('clientEmail');
     if(email && this.pendingCustomer?.correo) email.value=this.pendingCustomer.correo;
     Router.go('login-usuario'); setTimeout(()=>document.getElementById('clientEmail')?.focus(),40);
+    BiometricAuth.refreshLoginButton();
   },
   showRegister(){
     this.renderEventContext();
@@ -2034,6 +2206,8 @@ const ClienteAuth = {
       const customer=data&&data[0];
       if(!customer){toast('Correo o contraseña incorrectos.',true);return;}
       this.pendingCustomer=customer; await this.continueToPurchase(customer,evento);
+      // Ofrece activar huella/Face ID en este dispositivo tras un login exitoso
+      BiometricAuth.offerActivationAfterLogin(email, password);
     }finally{if(btn){btn.disabled=false;btn.textContent='Ingresar';}}
   },
   async register(){
