@@ -398,6 +398,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .client-auth-new{display:inline-flex; align-items:center; justify-content:center; min-height:42px; padding:10px 14px; border:1px solid var(--line-soft); border-radius:10px; color:var(--text); background:var(--panel-2); font-weight:700;}
 .client-auth-new:hover{border-color:var(--pink); box-shadow:var(--glow-pink);}
 .client-auth-note{margin-top:16px; padding-top:12px; border-top:1px solid var(--line-soft); color:var(--text-dim); font-size:10.5px; text-align:center; line-height:1.45;}
+.client-kyc-box{margin-bottom:18px; padding-bottom:16px; border-bottom:1px dashed var(--line-soft);}
 .client-recovery-code{margin:18px 0; padding:18px 14px; border:1px solid var(--cyan); border-radius:12px; background:#0e0a1e; color:var(--cyan); font-family:'Space Mono',monospace; font-size:20px; font-weight:700; letter-spacing:.08em; text-align:center; box-shadow:var(--glow-cyan); word-break:break-all;}
 .landing-event-hint{display:flex; align-items:center; justify-content:center; gap:8px; margin:14px auto 2px; color:var(--text-dim); font-size:12px; text-align:center;}
 .landing-event-dot{width:7px; height:7px; border-radius:50%; background:var(--cyan); box-shadow:0 0 10px var(--cyan); flex:0 0 auto;}
@@ -987,6 +988,11 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="card client-auth-card">
           <div class="section-title"><h2>Crear cuenta de cliente</h2></div>
           <p class="hint client-auth-subtitle">Crea tu acceso para comprar y consultar tus entradas.</p>
+          <div class="client-kyc-box" id="clientKycBox">
+            <button class="btn btn-ghost btn-block" type="button" id="btnDiditVerificar" onclick="DiditKYC.startForRegister()">🪪 Verificar mi cédula automáticamente</button>
+            <p class="hint" style="text-align:center; margin:6px 0 0;">Escanea tu documento y tu rostro: llenamos tu nombre y cédula por ti. Es opcional, pero acelera el registro y evita errores de digitación.</p>
+            <p class="hint" id="clientKycStatus" style="text-align:center; margin:6px 0 0; display:none;"></p>
+          </div>
           <form onsubmit="event.preventDefault(); ClienteAuth.register();">
             <div class="field">
               <label>Nombre completo</label>
@@ -2197,6 +2203,102 @@ const BiometricAuth = {
   }
 };
 
+/* =========================================================
+   DIDIT KYC — verificación de identidad (documento + rostro)
+   -------------------------------------------------------
+   Requiere 3 Edge Functions en Supabase (no se puede llamar a la API
+   de Didit directamente desde el navegador porque expondría la API
+   key): didit-crear-sesion, didit-verificar-estado y didit-webhook.
+   Ver instrucciones aparte para desplegarlas y la migración SQL.
+========================================================= */
+const DIDIT_PENDING_KEY = 'glm_didit_pending';
+const DiditKYC = {
+  _setStatusMsg(msg, isError){
+    const el = document.getElementById('clientKycStatus');
+    if(!el) return;
+    el.style.display = msg ? 'block' : 'none';
+    el.textContent = msg || '';
+    el.style.color = isError ? 'var(--bad)' : 'var(--text-dim)';
+  },
+  // Inicia una sesión de verificación pensada para el formulario de
+  // registro: guarda un id temporal (vendor_data) en sessionStorage,
+  // llama a la Edge Function que crea la sesión con la API key de Didit
+  // guardada en el servidor, y redirige al flujo hospedado de Didit.
+  // Al volver (callback), checkPendingReturn() retoma el flujo.
+  async startForRegister(){
+    const btn = document.getElementById('btnDiditVerificar');
+    if(btn){ btn.disabled = true; btn.textContent = 'Preparando verificación...'; }
+    this._setStatusMsg('');
+    try{
+      const vendorRef = 'reg-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+      const emailPrefill = document.getElementById('clientRegisterEmail')?.value?.trim() || '';
+      const callback = location.origin + location.pathname + '?didit-return=1';
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/didit-crear-sesion', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
+        body: JSON.stringify({ vendor_data: vendorRef, correo: emailPrefill, callback, contexto: 'registro_cliente' })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error || !data.url){
+        this._setStatusMsg('No se pudo iniciar la verificación: ' + (data.error || 'intenta de nuevo'), true);
+        return;
+      }
+      sessionStorage.setItem(DIDIT_PENDING_KEY, JSON.stringify({
+        session_id: data.session_id, vendor_data: vendorRef, evento_id: this.pendingEventoIdSafe()
+      }));
+      location.href = data.url;
+    }catch(err){
+      this._setStatusMsg('No se pudo iniciar la verificación: ' + (err.message||err), true);
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = '🪪 Verificar mi cédula automáticamente'; }
+    }
+  },
+  pendingEventoIdSafe(){
+    try{ return sessionStorage.getItem(CLIENT_PENDING_EVENT_KEY) || null; }catch(e){ return null; }
+  },
+  // Se llama en el arranque de la app (junto a checkBoldReturn) cuando la
+  // URL trae "?didit-return=1": consulta el estado de la sesión pendiente
+  // guardada en sessionStorage y, si quedó aprobada, autocompleta nombre y
+  // cédula en el formulario de registro con los datos leídos del documento.
+  async checkPendingReturn(){
+    const params = new URLSearchParams(location.search);
+    if(params.get('didit-return') !== '1') return;
+    history.replaceState(null, '', location.pathname + location.hash);
+    let pending = null;
+    try{ pending = JSON.parse(sessionStorage.getItem(DIDIT_PENDING_KEY) || 'null'); }catch(e){}
+    if(!pending || !pending.session_id) return;
+
+    const evento = pending.evento_id ? await (async()=>{ try{ const {data}=await sb.from('eventos').select('*').eq('id',pending.evento_id).limit(1); return data&&data[0]; }catch(e){ return null; } })() : null;
+    if(evento) ClienteAuth.setPendingEvento(evento);
+    ClienteAuth.showRegister();
+    this._setStatusMsg('Confirmando tu verificación, esto puede tardar unos segundos...');
+
+    let resultado = null;
+    for(let i=0;i<10;i++){
+      try{
+        const res = await fetch(EDGE_FUNCTIONS_URL + '/didit-verificar-estado?session_id=' + encodeURIComponent(pending.session_id), {
+          headers:{'Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY}
+        });
+        const data = await res.json().catch(()=>({}));
+        if(data.status === 'Approved' || data.status === 'Declined' || data.status === 'error'){ resultado = data; break; }
+      }catch(e){}
+      await new Promise(r=>setTimeout(r, 2500));
+    }
+    sessionStorage.removeItem(DIDIT_PENDING_KEY);
+
+    if(!resultado || resultado.status !== 'Approved'){
+      this._setStatusMsg('No alcanzamos a confirmar la verificación. Puedes intentarlo de nuevo o llenar tus datos manualmente.', true);
+      return;
+    }
+    const nombreEl = document.getElementById('clientRegisterName');
+    const cedulaEl = document.getElementById('clientRegisterCedula');
+    if(nombreEl && resultado.nombre) nombreEl.value = resultado.nombre;
+    if(cedulaEl && resultado.cedula) cedulaEl.value = resultado.cedula;
+    this._verifiedSessionId = pending.session_id;
+    this._setStatusMsg('✅ Identidad verificada. Revisa tus datos y termina de crear tu cuenta.');
+  }
+};
+
 const ClienteAuth = {
   pendingEvento: null,
   pendingCustomer: null,
@@ -2238,6 +2340,7 @@ const ClienteAuth = {
     const regEmail=document.getElementById('clientRegisterEmail'); if(regEmail&&loginEmail) regEmail.value=loginEmail;
     Router.go('login-cliente-register'); setTimeout(()=>document.getElementById('clientRegisterName')?.focus(),40);
   },
+  clearKycStatus(){ DiditKYC._setStatusMsg(''); },
   showRecovery(){
     const loginEmail=document.getElementById('clientEmail')?.value?.trim()||'';
     const recoveryEmail=document.getElementById('clientRecoveryEmail'); if(recoveryEmail&&loginEmail) recoveryEmail.value=loginEmail;
@@ -2285,6 +2388,14 @@ const ClienteAuth = {
       }
       const customer=data&&data[0]; if(!customer){toast('No se pudo crear la cuenta',true);return;}
       this.pendingCustomer=customer; this.pendingRecoveryCode=customer.recovery_code||null;
+      // Si el registro vino de una verificación Didit aprobada, se marca la
+      // cuenta como verificada. Se llama aparte (no como parámetro de
+      // crear_cliente) y en try/catch para no romper el registro si esta
+      // función aún no existe en el backend.
+      if(DiditKYC._verifiedSessionId && customer.id){
+        try{ await sb.rpc('marcar_cliente_verificado',{p_cliente_id:customer.id,p_kyc_session_id:DiditKYC._verifiedSessionId}); }catch(e){}
+        DiditKYC._verifiedSessionId = null;
+      }
       const codeEl=document.getElementById('clientCreatedRecoveryCode'); if(codeEl) codeEl.textContent=this.pendingRecoveryCode||'No disponible';
       Router.go('login-cliente-created');
     }finally{if(btn){btn.disabled=false;btn.textContent='Crear cuenta';}}
@@ -7645,6 +7756,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   const restored = await Auth.restore().catch(()=>false);
   if(!restored) Router.go('landing');
   checkBoldReturn();
+  DiditKYC.checkPendingReturn();
   const params = new URLSearchParams(location.search);
   if(params.get('validar')==='1'){
     ValidarPopup.abrir(params.get('evento'));
