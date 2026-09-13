@@ -71,6 +71,28 @@ button{font-family:inherit;}
     radial-gradient(ellipse 60% 55% at 50% 105%, rgba(157,77,255,.32), transparent 60%),
     linear-gradient(180deg, #060410, #0b0718 55%, #060410);
 }
+/* Video y velo van PRIMERO en el DOM (ver HTML) para quedar debajo de
+   todo lo demás dentro de #bg-fx: canvas de partículas, glows de color,
+   grid y scanline se siguen pintando encima, tal cual en el diseño
+   original — así el video no tapa la paleta neón, solo se suma detrás. */
+#bgVideo{
+  position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+  opacity:0; transition:opacity 1.1s ease;
+}
+#bgVideo.active{opacity:.5;}
+@media(max-width:700px){#bgVideo.active{opacity:.42;}}
+/* Sombra + degradado que se pone sobre el video (debajo del resto de
+   efectos) para conservar la paleta original (negro profundo +
+   magenta/cian/violeta) y la legibilidad del texto. */
+#bgVideoShade{
+  position:absolute; inset:0; opacity:0; transition:opacity 1.1s ease;
+  background:
+    radial-gradient(ellipse 60% 40% at 12% 8%, rgba(255,46,224,.30), transparent 60%),
+    radial-gradient(ellipse 55% 45% at 92% 12%, rgba(0,240,255,.20), transparent 60%),
+    radial-gradient(ellipse 60% 55% at 50% 105%, rgba(157,77,255,.28), transparent 60%),
+    linear-gradient(180deg, rgba(6,4,16,.55), rgba(8,5,15,.72) 55%, rgba(6,4,16,.92));
+}
+#bgVideoShade.active{opacity:1;}
 #vecCanvas{position:absolute; inset:0; width:100%; height:100%; opacity:.55; mix-blend-mode:screen;}
 #bg-fx .glow{
   position:absolute; border-radius:50%; filter:blur(70px); opacity:.55;
@@ -319,33 +341,26 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 @media(max-width:600px){.evt-slide{height:230px; border-radius:18px;}}
 .evt-slide.is-active{border-color:rgba(0,240,255,.5); box-shadow:var(--shadow), var(--glow-cyan);}
-.evt-slide img, .evt-slide video{width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; background:#050308;}
+.evt-slide img{width:100%; height:100%; object-fit:cover; display:block; pointer-events:none;}
 .evt-slide .evt-slide-fallback{
   width:100%; height:100%; display:flex; align-items:center; justify-content:center; text-align:center; padding:10px;
   font-family:'Orbitron',sans-serif; font-size:16px; background:linear-gradient(160deg, rgba(255,46,224,.25), rgba(0,240,255,.18));
 }
 .evt-slide .evt-slide-info{
-  position:absolute; left:0; right:0; bottom:0; padding:22px 22px 20px;
-  background:linear-gradient(0deg, rgba(5,3,10,.96) 12%, rgba(5,3,10,.62) 55%, rgba(5,3,10,0));
+  position:absolute; left:0; right:0; bottom:0; padding:20px 22px 18px;
+  background:linear-gradient(0deg, rgba(0,0,0,.9) 15%, rgba(0,0,0,.45) 65%, rgba(0,0,0,0));
   color:#fff; opacity:0; transform:translateY(8px); transition:opacity .4s, transform .4s; pointer-events:none;
 }
 .evt-slide.is-active .evt-slide-info{opacity:1; transform:translateY(0);}
-.evt-slide .evt-slide-info b{display:block; font-size:22px; font-family:'Orbitron',sans-serif; letter-spacing:.01em; margin-top:2px;}
-@media(max-width:600px){.evt-slide .evt-slide-info{padding:15px 16px 14px;} .evt-slide .evt-slide-info b{font-size:16px;}}
-/* pill de fecha, al estilo "badge" sobre la portada (video o imagen) */
-.evt-slide .evt-slide-info .evt-slide-pill{
-  display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; letter-spacing:.03em;
-  padding:4px 11px; border-radius:99px; background:rgba(157,77,255,.22); border:1px solid var(--line-soft);
-  color:var(--text); backdrop-filter:blur(4px);
+.evt-slide .evt-slide-info b{display:block; font-size:21px; font-family:'Orbitron',sans-serif; letter-spacing:.01em;}
+.evt-slide .evt-slide-info span{font-size:12.5px; color:var(--cyan); font-weight:600;}
+@media(max-width:600px){.evt-slide .evt-slide-info{padding:14px 16px 12px;} .evt-slide .evt-slide-info b{font-size:16px;} .evt-slide .evt-slide-info span{font-size:11px;}}
+.evt-slide .evt-slide-cta{
+  position:absolute; top:16px; right:16px; font-size:11px; padding:5px 12px; border-radius:20px;
+  background:rgba(0,240,255,.92); color:#0a0a0a; font-weight:700; letter-spacing:.02em;
+  opacity:0; transform:translateY(-4px); transition:opacity .4s, transform .4s; pointer-events:none;
 }
-@media(max-width:600px){.evt-slide .evt-slide-info .evt-slide-pill{font-size:9.5px; padding:3px 9px;}}
-/* botón CTA grande y redondeado bajo el título, en degradado neón */
-.evt-slide .evt-slide-info .evt-slide-cta{
-  display:inline-flex; align-items:center; gap:8px; margin-top:12px; padding:10px 20px; border-radius:99px;
-  background:linear-gradient(120deg, var(--pink), var(--violet)); color:#fff; font-weight:800; font-size:12.5px;
-  letter-spacing:.02em; box-shadow:var(--glow-pink); border:none;
-}
-@media(max-width:600px){.evt-slide .evt-slide-info .evt-slide-cta{padding:8px 16px; font-size:11px; margin-top:8px;}}
+.evt-slide.is-active .evt-slide-cta{opacity:1; transform:translateY(0);}
 .evt-slider-navcol{position:absolute; top:50%; right:0; transform:translateY(-50%); display:flex; flex-direction:column; gap:12px; z-index:30;}
 .evt-slider-nav{
   width:38px; height:38px; border-radius:50%;
@@ -363,7 +378,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
   transition:.2s;
 }
 .evt-picker-card:hover{border-color:var(--cyan); transform:translateY(-3px);}
-.evt-picker-card img, .evt-picker-card video{width:100%; height:120px; object-fit:cover; display:block; background:#0e0a1e; pointer-events:none;}
+.evt-picker-card img{width:100%; height:120px; object-fit:cover; display:block; background:#0e0a1e;}
 .evt-picker-card .evt-picker-body{padding:10px 12px;}
 .evt-picker-card b{display:block; font-family:'Orbitron',sans-serif; font-size:14px;}
 .evt-picker-card span{font-size:11.5px; color:var(--text-dim);}
@@ -814,6 +829,8 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 <body>
 
 <div id="bg-fx">
+  <video id="bgVideo" muted loop autoplay playsinline></video>
+  <div id="bgVideoShade"></div>
   <canvas id="vecCanvas"></canvas>
   <div class="glow g1"></div><div class="glow g2"></div><div class="glow g3"></div>
   <div class="grid"></div><div class="circuit"></div>
@@ -1069,6 +1086,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="a-compras" onclick="AdminApp.tab('a-compras')">Solicitudes de compra</div>
         <div class="pill-tab" data-tab="a-recibos" onclick="AdminApp.tab('a-recibos')">Recibos de pago</div>
         <div class="pill-tab" data-tab="a-chat" onclick="AdminApp.tab('a-chat')">Chat</div>
+        <div class="pill-tab" data-tab="a-ajustes" onclick="AdminApp.tab('a-ajustes')">Fondo de video</div>
       </div>
       <div class="tabs" style="margin-top:-4px; margin-bottom:14px;">
         <span class="hint" style="align-self:center; margin-right:4px;">Vista rápida de otras interfaces:</span>
@@ -1085,6 +1103,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div id="a-compras" class="tab-pane hide"></div>
       <div id="a-recibos" class="tab-pane hide"></div>
       <div id="a-chat" class="tab-pane hide"></div>
+      <div id="a-ajustes" class="tab-pane hide"></div>
     </section>
 
     <!-- ============ QR DASHBOARD ============ -->
@@ -1172,6 +1191,29 @@ function toast(msg, err){
   setTimeout(()=>{ el.remove(); }, 4200);
 }
 function money(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
+/* Copia cualquier texto (por ejemplo el UUID del evento) al portapapeles.
+   Usa la Clipboard API moderna y cae a un <textarea> temporal si el
+   navegador/contexto no la permite (http sin TLS, permisos, etc). */
+async function copiarTexto(texto, mensaje){
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(texto);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = texto;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    toast(mensaje || 'Copiado al portapapeles');
+  }catch(e){
+    console.error(e);
+    toast('No se pudo copiar: '+e.message, true);
+  }
+}
 /* ---------- Exportar / Importar evento (CSV) ----------
    Permite descargar toda la configuración de un evento (nombre, fecha,
    hora, estado, imagen y el objeto "mapa" con pisos/palcos/VIP/general/
@@ -1522,34 +1564,67 @@ function descargarImagen(dataUrl, filename){
 function escapeHtml(s){
   return (s||'').toString().replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-// Convierte un enlace de Google Drive ("Compartir" -> .../file/d/ID/view o
-// .../open?id=ID) en un enlace directo reproducible como <video src="...">.
-// Cualquier otra URL (mp4 directo, otro hosting) se deja tal cual.
-// Requisito indispensable en Drive: el archivo debe compartirse como
-// "Cualquier persona con el enlace" (visor), si no, el navegador no podrá
-// reproducirlo aunque la URL esté bien formada.
-function normalizeVideoUrl(url){
-  url = (url||'').trim();
-  if(!url) return '';
-  const m = url.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([a-zA-Z0-9_-]+)/);
-  if(m && m[1]) return `https://drive.google.com/uc?export=download&id=${m[1]}`;
-  return url;
-}
-// Portada (imagen o video en loop) para las tarjetas pequeñas de selección de
-// evento (comprar tickets / escanear / vender), reutilizada en los 3 lugares
-// donde aparece ese grid para no repetir la misma lógica de fallback 3 veces.
-function pickerMediaHtml(e){
-  if(e.video_url){
-    return `<video src="${escapeHtml(e.video_url)}"${e.imagen_url?` poster="${escapeHtml(e.imagen_url)}"`:''} autoplay muted loop playsinline preload="metadata"
-              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"></video>
-            <div class="evt-slide-fallback" style="display:none; height:120px;">${escapeHtml(e.nombre)}</div>`;
+/* =========================================================
+   FONDO DE VIDEO GLOBAL (configurable desde el panel de Admin)
+   Se guarda en la tabla "config" de Supabase (fila con key='bg_video_url')
+   para que se vea igual para TODOS los usuarios. El <video> vive dentro
+   de #bg-fx, fuera del área que cambia el Router, así que una sola
+   carga aplica a TODAS las pantallas (landing, login, admin, QR, VT...).
+========================================================= */
+const SiteConfig = {
+  CONFIG_KEY: 'bg_video_url',
+  url: '',
+  async load(){
+    try{
+      const {data, error} = await sb.from('config').select('value').eq('key', this.CONFIG_KEY).limit(1);
+      if(!error && data && data[0]) this.url = data[0].value || '';
+    }catch(e){ /* la tabla "config" puede no existir aún: seguimos sin video de fondo */ }
+    this.apply(this.url);
+  },
+  async save(rawUrl){
+    const url = (rawUrl||'').trim();
+    const {error} = await sb.from('config').upsert({key:this.CONFIG_KEY, value:url}, {onConflict:'key'});
+    if(error) throw error;
+    this.url = url;
+    this.apply(url);
+  },
+  // Convierte un enlace "Compartir" de Google Drive (.../file/d/ID/view...)
+  // en un enlace de descarga directa que el navegador puede reproducir.
+  // Nota: para archivos grandes, Drive a veces exige una confirmación
+  // ("no se puede verificar por virus") y el video no cargará — en ese
+  // caso conviene subir el archivo con el botón de subida del panel.
+  resolveUrl(raw){
+    const url = (raw||'').trim();
+    if(!url) return '';
+    if(url.includes('drive.google.com')){
+      const m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if(m && m[1]) return `https://drive.google.com/uc?export=download&id=${m[1]}`;
+    }
+    return url;
+  },
+  apply(rawUrl){
+    const video = document.getElementById('bgVideo');
+    const shade = document.getElementById('bgVideoShade');
+    if(!video) return;
+    const url = this.resolveUrl(rawUrl);
+    if(!url){
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      video.classList.remove('active');
+      if(shade) shade.classList.remove('active');
+      return;
+    }
+    if(video.dataset.src !== url){
+      video.dataset.src = url;
+      video.src = url;
+      video.load();
+      video.play().catch(()=>{ /* el navegador puede bloquear el autoplay hasta la primera interacción del usuario */ });
+    }
+    video.classList.add('active');
+    if(shade) shade.classList.add('active');
   }
-  if(e.imagen_url){
-    return `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-            <div class="evt-slide-fallback" style="display:none; height:120px;">${escapeHtml(e.nombre)}</div>`;
-  }
-  return `<div class="evt-slide-fallback" style="height:120px;">${escapeHtml(e.nombre)}</div>`;
-}
+};
 // Sube un archivo al bucket de Storage "comprobantes" y devuelve su URL pública.
 async function uploadToComprobantes(file, folder){
   return uploadToBucket('comprobantes', file, folder);
@@ -2254,6 +2329,72 @@ const Seats = {
       for(let n=existentesCat+1; n<=(c.cantidad||0); n++){ rows.push({evento_id:evento.id, zona:c.id, numero:`${prefix}-${n}`}); }
     });
     if(rows.length) await sb.from('asientos').insert(rows);
+  },
+  // Detecta y borra "ubicaciones fantasma": filas de la tabla "asientos" que
+  // quedaron guardadas en Supabase pero que ya NO corresponden a la
+  // configuración actual del "mapa" del evento (por ejemplo, sillas de un
+  // palco/VIP/categoría que se creó por error o de una versión anterior del
+  // evento). Como TODAS las pantallas (admin, cliente, vendedor, taquilla)
+  // leen los asientos con Seats.all(), una fila huérfana se ve como una
+  // ubicación real en cualquier usuario aunque el admin nunca la pidió.
+  // Por seguridad, solo se borran asientos LIBRES (ocupado=false): un puesto
+  // ya vendido/ocupado nunca se toca, aunque haya quedado fuera del mapa
+  // actual, para no romper tickets ya emitidos.
+  async detectarFantasmas(eventoId){
+    const {data: eventoRows} = await sb.from('eventos').select('mapa').eq('id', eventoId).limit(1);
+    const mapa = (eventoRows && eventoRows[0] && eventoRows[0].mapa) || {};
+    const sillasPalco = Number(mapa.sillasPalco)||8;
+    const sillasVip = Number(mapa.sillasVip)||8;
+    const totalPalcos = Number(mapa.palcos)||0;
+    const totalVip = Number(mapa.vipUbicaciones)||0;
+    const totalGeneral = Number(mapa.general)||0;
+    const categoriasValidas = {};
+    (mapa.categorias||[]).forEach(c=>{ categoriasValidas[c.id] = Number(c.cantidad)||0; });
+    const {data} = await sb.from('asientos').select('*').eq('evento_id', eventoId);
+    const asientos = data || [];
+    const esValido = (a)=>{
+      if(a.zona==='palco'){
+        const [pKey, sKey] = a.numero.split('-');
+        const p = parseInt((pKey||'').replace('P',''),10);
+        const s = parseInt((sKey||'').replace('S',''),10);
+        return p>=1 && p<=totalPalcos && s>=1 && s<=sillasPalco;
+      }
+      if(a.zona==='vip'){
+        if(!a.numero.includes('-')) return true; // VIP plano de formato antiguo: se respeta siempre
+        const [vKey, sKey] = a.numero.split('-');
+        const v = parseInt((vKey||'').replace('VIP',''),10);
+        const s = parseInt((sKey||'').replace('S',''),10);
+        return v>=1 && v<=totalVip && s>=1 && s<=sillasVip;
+      }
+      if(a.zona==='general'){
+        const g = parseInt((a.numero||'').replace('G',''),10);
+        return g>=1 && g<=totalGeneral;
+      }
+      // Categoría personalizada: la zona debe existir en mapa.categorias y el
+      // número de puesto no debe superar la cantidad configurada.
+      if(Object.prototype.hasOwnProperty.call(categoriasValidas, a.zona)){
+        const n = parseInt((a.numero||'').split('-').pop(),10);
+        return n>=1 && n<=categoriasValidas[a.zona];
+      }
+      // Zona que ya no existe en mapa.categorias en absoluto: fantasma.
+      return false;
+    };
+    const fantasmas = asientos.filter(a=> !esValido(a));
+    const libres = fantasmas.filter(a=> !a.ocupado);
+    const ocupados = fantasmas.filter(a=> a.ocupado);
+    return {libres, ocupados};
+  },
+  async limpiarFantasmas(eventoId){
+    const {libres, ocupados} = await this.detectarFantasmas(eventoId);
+    if(libres.length){
+      const ids = libres.map(a=>a.id);
+      // Supabase .in() soporta muchos ids, pero se envía en lotes por si el
+      // evento tiene demasiados asientos huérfanos acumulados.
+      for(let i=0;i<ids.length;i+=500){
+        await sb.from('asientos').delete().in('id', ids.slice(i,i+500));
+      }
+    }
+    return {eliminados: libres.length, ocupadosOmitidos: ocupados.length};
   },
   async free(eventoId, zona, palco){
     let q = sb.from('asientos').select('*').eq('evento_id',eventoId).eq('zona',zona).eq('ocupado',false).order('numero').limit(80);
@@ -3215,26 +3356,15 @@ const EventSlider = {
   },
   slideHtml(e,i){
     const fecha = e.fecha ? `${e.fecha}${e.hora?' · '+e.hora:''}` : 'Fecha por confirmar';
-    // Portada del evento: si el admin cargó un video de fondo (mp4 directo o
-    // enlace de Google Drive), se reproduce en loop/silenciado como fondo del
-    // slide (igual que el video de referencia); si falla o no hay video, cae
-    // a la imagen/flyer; si tampoco hay imagen, cae al fondo de texto de siempre.
-    const media = e.video_url
-      ? `<video src="${escapeHtml(e.video_url)}"${e.imagen_url?` poster="${escapeHtml(e.imagen_url)}"`:''} autoplay muted loop playsinline preload="metadata"
-           onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"></video>
+    const img = e.imagen_url
+      ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
          <div class="evt-slide-fallback" style="display:none;">${escapeHtml(e.nombre)}</div>`
-      : e.imagen_url
-        ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-           <div class="evt-slide-fallback" style="display:none;">${escapeHtml(e.nombre)}</div>`
-        : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`;
+      : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`;
     return `
       <div class="evt-slide" data-i="${i}" data-id="${e.id}">
-        ${media}
-        <div class="evt-slide-info">
-          <span class="evt-slide-pill">📅 ${escapeHtml(fecha)}</span>
-          <b>${escapeHtml(e.nombre)}</b>
-          <span class="evt-slide-cta">🎟️ Comprar entradas</span>
-        </div>
+        ${img}
+        <span class="evt-slide-cta">🎟️ Comprar</span>
+        <div class="evt-slide-info"><b>${escapeHtml(e.nombre)}</b><span>📅 ${escapeHtml(fecha)}</span></div>
       </div>`;
   },
   // Recalcula la posición/escala de cada tarjeta según su distancia a la
@@ -3681,7 +3811,7 @@ const UsuarioApp = {
           <div class="evt-picker-grid">
             ${eventos.map(e=>`
               <div class="evt-picker-card" onclick="UsuarioApp.elegirEventoCompra('${e.id}')">
-                ${pickerMediaHtml(e)}
+                ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
                 <div class="evt-picker-body">
                   <b>${escapeHtml(e.nombre)}</b>
                   <span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span>
@@ -4186,6 +4316,7 @@ const AdminApp = {
     }
     if(name==='a-recibos') this.renderRecibosPago();
     if(name==='a-chat') this.renderChat();
+    if(name==='a-ajustes') this.renderAjustes();
     // Refresco en tiempo real de las pestañas con datos que cambian seguido.
     AutoRefresh.stop('admin-tab');
     if(name==='a-tickets') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-tickets') this.renderTickets(); }, 20000);
@@ -4199,6 +4330,59 @@ const AdminApp = {
     if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento activo para editar su mapa.</p></div>`; return; }
     box.innerHTML = `<div class="card" style="margin-bottom:12px;"><p class="hint">Arrastra el encabezado (⠿) de cada palco, la zona VIP o la zona general para reubicarla. Pasa el cursor sobre una silla para ver su número. Los cambios se guardan y se reflejan en el mapa que ve el usuario.</p></div><div id="a-mapa-canvas"></div>`;
     MapView.render(document.getElementById('a-mapa-canvas'), this.evento.id, null, {editable:true});
+  },
+  /* ---------- Fondo de video global (todas las pantallas) ---------- */
+  renderAjustes(){
+    const box = document.getElementById('a-ajustes');
+    const current = SiteConfig.url || '';
+    const preview = current ? SiteConfig.resolveUrl(current) : '';
+    box.innerHTML = `
+      <div class="card">
+        <div class="section-title"><h2 style="font-size:19px;">Fondo de video</h2></div>
+        <p class="hint">Se reproduce en bucle y en silencio detrás de toda la interfaz (inicio, login, panel admin, control de acceso, punto de venta, etc.), sin cambiar los colores ni el diseño actual — el video queda debajo de los efectos de neón.</p>
+        <p class="hint">Pega la URL directa de un video (.mp4) o un enlace "Compartir" de Google Drive (debe estar configurado como "Cualquier persona con el enlace"). Si el video no carga por ser de Google Drive (ocurre con archivos grandes), sube el archivo directamente con el campo de abajo: quedará alojado de forma confiable.</p>
+        <div class="field">
+          <label>URL del video (directa o Google Drive)</label>
+          <input type="text" id="ajustesVideoUrl" placeholder="https://drive.google.com/file/d/XXXXXXXX/view?usp=sharing" value="${escapeHtml(current)}">
+        </div>
+        <div class="field">
+          <label>…o sube un archivo de video</label>
+          <input type="file" id="ajustesVideoFile" accept="video/mp4,video/webm,video/*">
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
+          <button class="btn btn-primary" onclick="AdminApp.guardarVideoFondo()">Guardar</button>
+          <button class="btn" onclick="AdminApp.quitarVideoFondo()">Quitar video</button>
+        </div>
+        ${preview ? `<div style="margin-top:16px;">
+          <p class="hint" style="margin-bottom:6px;">Vista previa:</p>
+          <video src="${escapeHtml(preview)}" muted loop autoplay playsinline style="width:100%; max-width:420px; border-radius:12px; border:1px solid var(--line-soft); display:block;"></video>
+        </div>` : ''}
+      </div>`;
+  },
+  async guardarVideoFondo(){
+    const fileInput = document.getElementById('ajustesVideoFile');
+    const urlInput = document.getElementById('ajustesVideoUrl');
+    try{
+      let url = urlInput ? urlInput.value.trim() : '';
+      if(fileInput && fileInput.files && fileInput.files[0]){
+        toast('Subiendo video…');
+        url = await uploadToBucket('eventos', fileInput.files[0], 'fondo-video');
+      }
+      await SiteConfig.save(url);
+      toast('Fondo de video guardado');
+      this.renderAjustes();
+    }catch(e){
+      toast('No se pudo guardar el video: '+(e.message||e), true);
+    }
+  },
+  async quitarVideoFondo(){
+    try{
+      await SiteConfig.save('');
+      toast('Video de fondo eliminado');
+      this.renderAjustes();
+    }catch(e){
+      toast('No se pudo quitar el video', true);
+    }
   },
   /* ---------- Ubicaciones para patrocinadores (palcos a valor 0) ---------- */
   async renderPatrocinadores(){
@@ -4476,10 +4660,7 @@ const AdminApp = {
           </div>
           <div class="field"><label>Nombre del evento</label><input id="evNombre" placeholder="ej: Cashless Fest 2026"></div>
           <div class="field"><label>Imagen / flyer del evento</label><input id="evImagen" type="file" accept="image/*">
-            <p class="hint" style="margin-top:4px;">Se mostrará en el slider de publicidad del inicio (y como imagen de respaldo mientras carga el video, si agregas uno abajo).</p>
-          </div>
-          <div class="field"><label>Video de fondo (opcional)</label><input id="evVideo" type="text" placeholder="Pega aquí el enlace del video (Google Drive u otro)">
-            <p class="hint" style="margin-top:4px;">Si lo agregas, reemplaza la imagen como fondo del evento en el slider de inicio (en loop y sin sonido). Para usar un video de Google Drive: súbelo a Drive, clic derecho → "Compartir" → cambia el acceso a "Cualquier persona con el enlace" → copia ese enlace y pégalo aquí.</p>
+            <p class="hint" style="margin-top:4px;">Se mostrará en el slider de publicidad del inicio.</p>
           </div>
           <div class="row">
             <div class="field" style="flex:1;"><label>Fecha</label><input id="evFecha" type="date"></div>
@@ -4550,12 +4731,19 @@ const AdminApp = {
     const list = document.getElementById('evList');
     if(!this.eventos.length){ list.innerHTML = `<p class="hint">Aún no has creado eventos.</p>`; return; }
     list.innerHTML = this.eventos.map(e=>`
-      <div class="stat" style="margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
-        <div>
+      <div class="stat" style="margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:220px;">
           <b style="font-size:18px;">${escapeHtml(e.nombre)}</b>
           <div class="hint mono">${e.codigo} · ${e.fecha||'sin fecha'} ${e.hora||''}</div>
           <span class="badge ${e.estado==='activo'?'ok':'bad'}">${e.estado}</span>
           ${this.evento && this.evento.id===e.id ? '<span class="badge neutral">seleccionado</span>':''}
+          <div style="margin-top:10px; padding:10px 12px; border:1px dashed var(--line); border-radius:10px; background:var(--bg-soft, rgba(255,255,255,0.03));">
+            <div class="hint" style="margin-bottom:4px;">ID del evento (para el servidor local)</div>
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <code style="font-size:16px; font-weight:700; word-break:break-all; user-select:all;">${e.id}</code>
+              <button type="button" class="btn btn-sm btn-primary" onclick="copiarTexto('${e.id}','ID del evento copiado')">📋 Copiar ID</button>
+            </div>
+          </div>
         </div>
         <div class="row" style="flex-wrap:wrap;">
           <button class="btn btn-sm" onclick="AdminApp.selectEvento('${e.id}')">Seleccionar</button>
@@ -4563,16 +4751,9 @@ const AdminApp = {
           <button class="btn btn-sm" onclick="AdminApp.openAjustarMapa('${e.id}')">Ajustar palcos/VIP</button>
           <button class="btn btn-sm" onclick="AdminApp.configurarPago('${e.id}')">Config. de pago</button>
           <button class="btn btn-sm" onclick="AdminApp.exportarEvento('${e.id}')">⬇️ Exportar</button>
+          <button class="btn btn-sm" onclick="AdminApp.limpiarFantasmas('${e.id}')">🧹 Limpiar ubicaciones fantasma</button>
         </div>
         <div id="mapaEdit-${e.id}" class="hide" style="margin-top:10px; border-top:1px dashed var(--line); padding-top:10px;">
-          <div style="border:1px dashed var(--line-soft); border-radius:12px; padding:12px; margin-bottom:14px;">
-            <label style="display:block; margin-bottom:8px; font-size:13px; color:var(--text-dim);">Portada del evento (imagen/video del slider de inicio)</label>
-            <div class="field"><label>Reemplazar imagen / flyer</label><input id="mapaEditImagen-${e.id}" type="file" accept="image/*"></div>
-            <div class="field"><label>Video de fondo (opcional)</label><input id="mapaEditVideo-${e.id}" type="text" value="${escapeHtml(e.video_url||'')}" placeholder="Pega aquí el enlace del video (Google Drive u otro)">
-              <p class="hint" style="margin-top:4px;">Deja el campo vacío para quitar el video y volver a mostrar solo la imagen. Enlace de Drive: clic derecho → "Compartir" → "Cualquier persona con el enlace".</p>
-            </div>
-            <button class="btn btn-sm" type="button" onclick="AdminApp.guardarPortada('${e.id}')">Guardar portada</button>
-          </div>
           <div class="field">
             <label>¿Cuántos pisos tiene el evento?</label>
             <select id="mapaEditPisos-${e.id}" onchange="AdminApp.togglePisoWraps('${e.id}')">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===((e.mapa&&Number(e.mapa.pisos))||1)?'selected':''}>${n===1?'1 (un solo nivel)':n+' pisos'}</option>`).join('')}</select>
@@ -4976,27 +5157,6 @@ const AdminApp = {
     toast('Mapa actualizado: '+palcos+' palcos ('+sillasPalco+' sillas c/u), '+vipUbicaciones+' ubicaciones VIP ('+sillasVip+' sillas c/u), '+general+' general');
     this.renderEventos();
   },
-  // Actualiza solo la portada del evento (imagen/flyer y/o video de fondo)
-  // que se muestra en el slider de publicidad del inicio. Independiente del
-  // resto del "mapa" (palcos/VIP/general) para no arriesgar esos datos.
-  async guardarPortada(id){
-    const evento = this.eventos.find(e=>e.id===id);
-    if(!evento) return;
-    const cambios = {};
-    const imgFile = document.getElementById('mapaEditImagen-'+id).files[0];
-    if(imgFile){
-      try{ cambios.imagen_url = await uploadToBucket('eventos', imgFile, evento.codigo||id); }
-      catch(e){ console.error(e); toast('No se pudo subir la imagen: '+e.message, true); return; }
-    }
-    const videoInput = document.getElementById('mapaEditVideo-'+id).value;
-    cambios.video_url = normalizeVideoUrl(videoInput) || null;
-    const {error} = await sb.from('eventos').update(cambios).eq('id', id);
-    if(error){ toast('Error actualizando la portada: '+error.message, true); console.error(error); return; }
-    Object.assign(evento, cambios);
-    if(this.evento && this.evento.id===id) Object.assign(this.evento, cambios);
-    toast('Portada actualizada');
-    this.renderEventos();
-  },
   async crearEvento(){
     const nombre = document.getElementById('evNombre').value.trim();
     const fecha = document.getElementById('evFecha').value || null;
@@ -5047,8 +5207,7 @@ const AdminApp = {
       try{ imagen_url = await uploadToBucket('eventos', imgFile, codigo); }
       catch(e){ console.error(e); toast('El evento se creará, pero no se pudo subir la imagen: '+e.message, true); }
     }
-    const video_url = normalizeVideoUrl(document.getElementById('evVideo').value) || null;
-    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url, video_url}).select();
+    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url}).select();
     if(error){ toast('Error creando el evento: '+error.message, true); console.error(error); return; }
     toast('Evento creado: '+codigo);
     delete this._catState['nuevo'];
@@ -5067,11 +5226,45 @@ const AdminApp = {
   exportarEvento(id){
     const e = this.eventos.find(x=>x.id===id);
     if(!e){ toast('Evento no encontrado', true); return; }
-    const headers = ['nombre','codigo','fecha','hora','estado','imagen_url','video_url','mapa'];
-    const fila = [e.nombre||'', e.codigo||'', e.fecha||'', e.hora||'', e.estado||'', e.imagen_url||'', e.video_url||'', JSON.stringify(e.mapa||{})];
+    const headers = ['nombre','codigo','fecha','hora','estado','imagen_url','mapa'];
+    const fila = [e.nombre||'', e.codigo||'', e.fecha||'', e.hora||'', e.estado||'', e.imagen_url||'', JSON.stringify(e.mapa||{})];
     const csv = csvBuildRow(headers) + '\r\n' + csvBuildRow(fila) + '\r\n';
     descargarArchivo('evento_'+(e.codigo||e.id)+'.csv', csv);
     toast('Evento exportado. Usa "Importar evento" en la otra plataforma para crearlo allá.');
+  },
+  /* Revisa la tabla "asientos" del evento contra la configuración actual del
+     "mapa" (pisos/palcos/VIP/general/categorías) y borra las filas que ya no
+     corresponden a nada configurado por el admin ("ubicaciones fantasma").
+     Solo borra puestos LIBRES; si encuentra alguno ocupado/vendido fuera de
+     la config actual, lo deja intacto y avisa para que el admin decida a
+     mano (ajustando el mapa en vez de perder un ticket ya emitido). */
+  async limpiarFantasmas(id){
+    const e = this.eventos.find(x=>x.id===id);
+    if(!e){ toast('Evento no encontrado', true); return; }
+    toast('Revisando ubicaciones de "'+e.nombre+'"…');
+    let resumen;
+    try{ resumen = await Seats.detectarFantasmas(id); }
+    catch(err){ console.error(err); toast('No se pudo revisar el evento: '+err.message, true); return; }
+    const {libres, ocupados} = resumen;
+    if(!libres.length && !ocupados.length){
+      toast('No se encontraron ubicaciones fantasma en este evento.');
+      return;
+    }
+    const detalle = libres.length
+      ? `Se encontraron ${libres.length} puesto(s) libres que ya no están en la configuración actual del mapa. ¿Borrarlos?`
+      : 'No hay puestos libres para borrar.';
+    if(libres.length && !confirm(detalle)){ toast('Limpieza cancelada'); return; }
+    let out = {eliminados:0, ocupadosOmitidos: ocupados.length};
+    if(libres.length){
+      try{ out = await Seats.limpiarFantasmas(id); }
+      catch(err){ console.error(err); toast('Error borrando ubicaciones fantasma: '+err.message, true); return; }
+    }
+    if(out.ocupadosOmitidos>0){
+      toast(`Se borraron ${out.eliminados} ubicación(es) fantasma. ${out.ocupadosOmitidos} estaban ocupadas y NO se tocaron (tienen ticket asignado); ajusta el mapa si quieres incluirlas oficialmente.`, out.eliminados===0);
+    } else {
+      toast(out.eliminados>0 ? `Se borraron ${out.eliminados} ubicación(es) fantasma.` : 'No había ubicaciones fantasma libres para borrar.');
+    }
+    if(this.evento && this.evento.id===id) await Seats.all(id); // refresca reconciliación por si algo cambió
   },
   /* Lee el .csv generado por "exportarEvento" y crea un evento nuevo (con
      código propio) igual al original: mismo nombre, fecha, hora y "mapa"
@@ -5097,8 +5290,7 @@ const AdminApp = {
     try{ mapa = JSON.parse(get('mapa') || '{}'); }
     catch(e){ toast('El campo "mapa" del archivo no es un JSON válido', true); return; }
     const codigo = genCode('EVT');
-    const video_url = normalizeVideoUrl(get('video_url')) || null;
-    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url:null, video_url}).select();
+    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url:null}).select();
     if(error){ toast('Error importando el evento: '+error.message, true); console.error(error); return; }
     toast('Evento importado: '+codigo+'. Si necesitas la imagen, súbela de nuevo desde "Ajustar palcos/VIP" o al editar el evento.');
     if(inp) inp.value = '';
@@ -5834,7 +6026,7 @@ const QRApp = {
         <div class="evt-picker-grid">
           ${eventos.map(e=>`
             <div class="evt-picker-card" onclick="QRApp.elegirEvento('${e.id}')">
-              ${pickerMediaHtml(e)}
+              ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
               <div class="evt-picker-body"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span></div>
             </div>`).join('')}
         </div>
@@ -6015,7 +6207,7 @@ const VTApp = {
         <div class="evt-picker-grid">
           ${eventos.map(e=>`
             <div class="evt-picker-card" onclick="VTApp.elegirEvento('${e.id}')">
-              ${pickerMediaHtml(e)}
+              ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
               <div class="evt-picker-body"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span></div>
             </div>`).join('')}
         </div>
@@ -6509,6 +6701,7 @@ const ValidarPopup = {
 ========================================================= */
 document.addEventListener('DOMContentLoaded', async ()=>{
   IconSettings.apply();
+  SiteConfig.load().catch(()=>{});
 
   const restored = await Auth.restore().catch(()=>false);
   if(!restored) Router.go('landing');
