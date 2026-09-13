@@ -1996,6 +1996,10 @@ const BIOMETRIC_SALT = new Uint8Array([0x43,0x61,0x73,0x68,0x6c,0x65,0x73,0x73,0
 function bioBufToB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 function bioB64ToBuf(b64){ const bin=atob(b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i); return arr.buffer; }
 const BiometricAuth = {
+  // Se pone en true justo antes de reenviar el login normal luego de un
+  // ingreso exitoso con huella (loginWithBiometric), para no volver a pedir
+  // la huella una segunda vez al entrar al perfil justo después.
+  _justUsedBiometric:false,
   async isSupported(){
     if(!window.isSecureContext || !window.PublicKeyCredential) return false;
     try{ return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
@@ -2128,6 +2132,7 @@ const BiometricAuth = {
       const passEl = document.getElementById('clientPassword');
       if(emailEl) emailEl.value = correo;
       if(passEl) passEl.value = password;
+      this._justUsedBiometric = true;
       await ClienteAuth.login();
     }catch(e){
       if(e && e.name==='NotAllowedError'){ toast('Verificación de huella cancelada.', true); }
@@ -2140,6 +2145,68 @@ const BiometricAuth = {
     this.forget();
     toast('Se olvidó la huella en este dispositivo.');
     this.refreshLoginButton();
+  },
+  // Verificación "suelta" de huella/Face ID: confirma con el lector del
+  // celular (autenticador de plataforma) contra la credencial guardada en
+  // este dispositivo. No depende de la extensión PRF (no descifra nada),
+  // solo confirma que quien tiene el celular en la mano puede desbloquearlo
+  // con esa huella. Se usa para el auto-registro de entrada y para la
+  // confirmación al entrar al perfil.
+  async verify(){
+    const stored = this.getStored();
+    if(!stored) return false;
+    if(!(await this.isSupported())) return false;
+    try{
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      await navigator.credentials.get({
+        publicKey:{
+          challenge,
+          allowCredentials:[{id:bioB64ToBuf(stored.credentialId), type:'public-key'}],
+          userVerification:'required',
+          timeout:60000
+        }
+      });
+      return true;
+    }catch(e){
+      if(!(e && e.name==='NotAllowedError')) toast('No se pudo verificar la huella: '+(e && e.message ? e.message : e), true);
+      return false;
+    }
+  },
+  // Al entrar al perfil (Mis tickets / cuenta del cliente), si este
+  // dispositivo tiene una huella activada para ese mismo correo, se pide
+  // confirmarla como paso adicional antes de mostrar el perfil. Es solo una
+  // confirmación (no bloquea el acceso si la persona la omite o si falla),
+  // igual que el resto del uso de huella en esta app: es una llave local de
+  // conveniencia, no un mecanismo de seguridad del servidor.
+  async confirmarLlaveParaPerfil(correo){
+    if(this._justUsedBiometric){ this._justUsedBiometric = false; return true; }
+    const stored = this.getStored();
+    if(!stored || !correo) return true;
+    if(stored.correo && stored.correo !== String(correo).toLowerCase()) return true;
+    if(!(await this.isSupported())) return true;
+    return new Promise((resolve)=>{
+      document.body.insertAdjacentHTML('beforeend', `
+        <div class="modal-bg" id="bioPerfilModal">
+          <div class="modal">
+            <div class="section-title"><h2 style="font-size:19px;">Confirma tu huella</h2></div>
+            <p class="hint">Antes de entrar a tu perfil, confirma la llave generada por la huella o Face ID de este celular.</p>
+            <div class="row" style="margin-top:14px;">
+              <button class="btn btn-ghost btn-block" type="button" id="bioPerfilOmitir">Omitir</button>
+              <button class="btn btn-primary btn-block" type="button" id="bioPerfilBtn">Confirmar huella</button>
+            </div>
+          </div>
+        </div>`);
+      const cerrar = (ok)=>{ const m=document.getElementById('bioPerfilModal'); if(m) m.remove(); resolve(ok); };
+      const omitirBtn = document.getElementById('bioPerfilOmitir');
+      if(omitirBtn) omitirBtn.onclick = ()=>cerrar(true);
+      const btn = document.getElementById('bioPerfilBtn');
+      if(btn) btn.onclick = async ()=>{
+        btn.disabled = true; btn.textContent = 'Verificando huella...';
+        const ok = await this.verify();
+        if(ok){ toast('Huella confirmada.'); cerrar(true); }
+        else{ btn.disabled = false; btn.textContent = 'Confirmar huella'; }
+      };
+    });
   }
 };
 
@@ -2283,7 +2350,9 @@ const ClienteAuth = {
     renderEventPill(evento);
     const wa=document.getElementById('waLink'); if(wa) wa.href=`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent('Hola, tengo una novedad con mi compra ('+email+')')}`;
     try{sessionStorage.removeItem(CLIENT_PENDING_EVENT_KEY);}catch(e){}
-    this.pendingEvento=evento; Router.go('usuario'); UsuarioApp.tab('u-comprar');
+    this.pendingEvento=evento;
+    await BiometricAuth.confirmarLlaveParaPerfil(email);
+    Router.go('usuario'); UsuarioApp.tab('u-comprar');
   }
 };
 
@@ -3660,6 +3729,7 @@ const UsuarioApp = {
     Auth.setRole('usuario', {value:val}, 'Usuario');
     renderEventPill(this.evento);
     document.getElementById('waLink').href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent('Hola, tengo una novedad con mi entrada ('+val+')')}`;
+    await BiometricAuth.confirmarLlaveParaPerfil(val);
     Router.go('usuario');
     this.tab('u-tickets');
     this.renderTickets();
@@ -3679,6 +3749,7 @@ const UsuarioApp = {
     Auth.setRole('usuario', {value:idVal}, 'Usuario');
     renderEventPill(this.evento);
     document.getElementById('waLink').href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent('Hola, tengo una novedad con mi entrada ('+idVal+')')}`;
+    await BiometricAuth.confirmarLlaveParaPerfil(idVal);
     Router.go('usuario');
     this.tab('u-tickets');
     this.renderTickets();
@@ -3735,6 +3806,7 @@ const UsuarioApp = {
           </div>
         </div>
         <button class="btn btn-sm btn-block ticket-share" onclick="UsuarioApp.compartirTicket('${t.id}')">📤 Compartir</button>
+        ${(!scanned && BiometricAuth.hasRegistered()) ? `<button class="btn btn-sm btn-block" id="bioEntrada-${t.id}" style="margin-top:6px;" onclick="UsuarioApp.registrarEntradaConHuella('${t.id}')">🔒 Registrar mi entrada con huella</button>` : ''}
         ${esBold ? (
           solRecibo && solRecibo.recibo_url
             ? `<a class="btn btn-sm btn-block" style="margin-top:6px;" href="${solRecibo.recibo_url}" target="_blank">🧾 Ver recibo de pago (PDF)</a>`
@@ -3778,6 +3850,48 @@ const UsuarioApp = {
       if(url){ window.open(url, '_blank'); this.renderTickets(); }
       else toast('No se pudo generar el recibo de pago', true);
     }catch(e){ toast('Error generando el recibo: '+(e.message||e), true); }
+  },
+  // Permite que el propio cliente registre su entrada al evento usando la
+  // misma huella/Face ID con la que desbloquea el celular (autenticador de
+  // plataforma vía WebAuthn), sin necesitar que el personal de control de
+  // acceso escanee su QR. Solo aparece en la tarjeta si este dispositivo ya
+  // tiene la huella activada y el ticket todavía no fue escaneado.
+  async registrarEntradaConHuella(ticketId){
+    const t = this.tickets.find(x=>x.id===ticketId);
+    if(!t) return;
+    if(t.escaneado){ toast('Esta entrada ya fue registrada.', true); return; }
+    if(!BiometricAuth.hasRegistered()){ toast('Primero activa tu huella / Face ID desde el inicio de sesión.', true); return; }
+    if(!(await BiometricAuth.isSupported())){ toast('La huella no está disponible en este dispositivo/navegador.', true); return; }
+    const btn = document.getElementById('bioEntrada-'+ticketId);
+    const original = btn ? btn.textContent : '';
+    if(btn){ btn.disabled = true; btn.textContent = 'Verificando huella...'; }
+    try{
+      const ok = await BiometricAuth.verify();
+      if(!ok){ toast('No se pudo confirmar tu huella.', true); return; }
+      // Se vuelve a consultar el ticket antes de marcarlo, por si ya fue
+      // escaneado por el personal de control de acceso mientras tanto.
+      const {data} = await sb.from('tickets').select('*').eq('id', ticketId).limit(1);
+      const fresco = data && data[0];
+      if(!fresco){ toast('No se encontró el ticket.', true); return; }
+      if(fresco.escaneado){ toast('Esta entrada ya fue registrada.', true); await this.refreshTickets(); return; }
+      if(fresco.estado==='anulado'){ toast('Este ticket fue anulado y no puede usarse para ingresar.', true); return; }
+      if(fresco.transfer_code && fresco.transfer_code_expires && new Date(fresco.transfer_code_expires) > new Date()){
+        toast('Este ticket está en proceso de transferencia y no puede usarse para ingresar.', true); return;
+      }
+      const {data: evData} = await sb.from('eventos').select('*').eq('id', fresco.evento_id).limit(1);
+      const evento = evData && evData[0];
+      if(evento && evento.estado==='pausado'){ toast('Los ingresos están pausados por el administrador.', true); return; }
+      const now = new Date().toISOString();
+      const lector = 'Huella propia (' + (fresco.correo || fresco.nombre_cliente || 'cliente') + ')';
+      await sb.from('tickets').update({escaneado:true, escaneado_por:lector, escaneado_hora:now}).eq('id', ticketId);
+      try{
+        await sb.from('lecturas_qr').insert({evento_id:fresco.evento_id, ticket_id:fresco.id, codigo:fresco.codigo, lector, resultado:'valida', motivo:'auto_huella'});
+      }catch(e){ /* no bloquea el registro si la tabla aún no existe */ }
+      toast('¡Entrada registrada con tu huella!');
+      await this.refreshTickets();
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = original || '🔒 Registrar mi entrada con huella'; }
+    }
   },
   // Comparte los datos del ticket usando el share sheet nativo del dispositivo
   // (WhatsApp, Mensajes, etc.) y si el navegador no lo soporta, abre WhatsApp Web.
