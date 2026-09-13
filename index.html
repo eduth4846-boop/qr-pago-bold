@@ -2259,6 +2259,9 @@ const DIDIT_PENDING_KEY = 'glm_didit_pending';
 // Cuenta con acceso de cliente pendiente de pasar por el gate de KYC de login
 // (se guarda antes de redirigir a Didit, para poder retomar el login al volver).
 const DIDIT_LOGIN_PENDING_KEY = 'glm_didit_login_pending';
+// Verificación OBLIGATORIA (sin opción de "verificar más tarde") exigida
+// justo antes de dejar ver/mover el saldo de la Wallet del cliente.
+const DIDIT_WALLET_PENDING_KEY = 'glm_didit_wallet_pending';
 const DiditKYC = {
   _setStatusMsg(msg, isError, elId){
     const el = document.getElementById(elId || 'clientKycStatus');
@@ -2335,6 +2338,37 @@ const DiditKYC = {
       if(btn){ btn.disabled = false; btn.textContent = '🪪 Verificar mi cédula automáticamente'; }
     }
   },
+  // Verificación OBLIGATORIA para acceder a "Mi Wallet" (ver/mover saldo).
+  // A diferencia de startForLogin(), esta NO tiene botón de "verificar más
+  // tarde": mientras no quede Approved en Didit, WalletKit.renderCliente()
+  // sigue mostrando este gate en vez del saldo.
+  async startForWallet(){
+    const clienteId = Auth.identity && Auth.identity.customer_id;
+    if(!clienteId){ toast('Inicia sesión para verificar tu identidad.', true); return; }
+    const btn = document.getElementById('btnDiditVerificarWallet');
+    if(btn){ btn.disabled = true; btn.textContent = 'Preparando verificación...'; }
+    this._setStatusMsg('', false, 'walletKycStatus');
+    try{
+      const callback = location.origin + location.pathname + '?didit-return=1';
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/didit-crear-sesion', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
+        body: JSON.stringify({ vendor_data: String(clienteId), correo: Auth.identity.email||'', callback, contexto: 'wallet_cliente' })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error || !data.url){
+        this._setStatusMsg('No se pudo iniciar la verificación: ' + (data.error || 'intenta de nuevo'), true, 'walletKycStatus');
+        return;
+      }
+      sessionStorage.setItem(DIDIT_WALLET_PENDING_KEY, JSON.stringify({ session_id: data.session_id, cliente_id: clienteId, contexto: 'wallet_cliente' }));
+      sessionStorage.setItem(DIDIT_PENDING_KEY, JSON.stringify({ session_id: data.session_id, vendor_data: String(clienteId), contexto: 'wallet_cliente' }));
+      location.href = data.url;
+    }catch(err){
+      this._setStatusMsg('No se pudo iniciar la verificación: ' + (err.message||err), true, 'walletKycStatus');
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = '🪪 Verificar mi cédula automáticamente'; }
+    }
+  },
   pendingEventoIdSafe(){
     try{ return sessionStorage.getItem(CLIENT_PENDING_EVENT_KEY) || null; }catch(e){ return null; }
   },
@@ -2351,11 +2385,39 @@ const DiditKYC = {
     try{ pending = JSON.parse(sessionStorage.getItem(DIDIT_PENDING_KEY) || 'null'); }catch(e){}
     if(!pending || !pending.session_id) return;
 
+    if(pending.contexto === 'wallet_cliente'){
+      await this._resolveWalletReturn(pending);
+      return;
+    }
     if(pending.contexto === 'login_cliente'){
       await this._resolveLoginReturn(pending);
       return;
     }
     await this._resolveRegisterReturn(pending);
+  },
+  // Retoma la verificación OBLIGATORIA de la Wallet al volver de Didit:
+  // confirma la sesión, marca al cliente como verificado en la BD y
+  // vuelve a renderizar "Mi Wallet" (que ya mostrará el saldo real).
+  async _resolveWalletReturn(pending){
+    let walletPending = null;
+    try{ walletPending = JSON.parse(sessionStorage.getItem(DIDIT_WALLET_PENDING_KEY) || 'null'); }catch(e){}
+    const clienteId = (walletPending && walletPending.cliente_id) || pending.vendor_data;
+    Router.go('usuario'); UsuarioApp.tab('u-wallet');
+    this._setStatusMsg('Confirmando tu verificación, esto puede tardar unos segundos...', false, 'walletKycStatus');
+
+    const resultado = await this._pollSession(pending.session_id);
+    sessionStorage.removeItem(DIDIT_PENDING_KEY);
+    sessionStorage.removeItem(DIDIT_WALLET_PENDING_KEY);
+
+    if(!resultado || resultado.status !== 'Approved'){
+      this._setStatusMsg('No alcanzamos a confirmar tu verificación. Vuelve a intentarlo: es obligatoria para ver tu saldo.', true, 'walletKycStatus');
+      WalletKit.renderCliente();
+      return;
+    }
+    try{ await sb.rpc('marcar_cliente_verificado',{p_cliente_id:clienteId,p_kyc_session_id:pending.session_id}); }catch(e){}
+    WalletKit._kycVerificadoCache = true;
+    this._setStatusMsg('✅ Identidad verificada.', false, 'walletKycStatus');
+    WalletKit.renderCliente();
   },
   async _resolveRegisterReturn(pending){
     const evento = pending.evento_id ? await (async()=>{ try{ const {data}=await sb.from('eventos').select('*').eq('id',pending.evento_id).limit(1); return data&&data[0]; }catch(e){ return null; } })() : null;
@@ -2661,6 +2723,7 @@ const Auth = {
   identity: null, // datos del usuario logueado
   async logout(){
     this.role = null; this.identity = null;
+    WalletKit._kycVerificadoCache = null;
     try{ localStorage.removeItem(AUTH_STORAGE_KEY); }catch(e){}
     AutoRefresh.stopAll();
     document.getElementById('btnLogout').classList.add('hide');
@@ -2670,6 +2733,7 @@ const Auth = {
   },
   setRole(role, identity, label){
     this.role = role; this.identity = identity;
+    if(typeof WalletKit !== 'undefined') WalletKit._kycVerificadoCache = null;
     document.getElementById('btnLogout').classList.remove('hide');
     document.getElementById('roleBadgeWrap').innerHTML = `<span class="role-badge">${label}</span>`;
     // Guarda la sesión en este navegador para que la persona siga
@@ -7726,6 +7790,37 @@ const WalletKit = {
       toast('Error enviando el comprobante: '+(err.message||err), true);
     }
   },
+  // Estado de verificación KYC del cliente logueado, siempre consultado
+  // fresco al backend (nunca confía en un valor cacheado en el navegador),
+  // porque el saldo de la Wallet es justo el punto donde la verificación
+  // es OBLIGATORIA sin opción de saltarla. Requiere el RPC
+  // obtener_estado_kyc (ver schema_kyc_wallet.sql).
+  _kycVerificadoCache: null,
+  async kycVerificado(forzar){
+    const clienteId = Auth.identity && Auth.identity.customer_id;
+    if(!clienteId) return false; // sin cuenta de cliente no hay wallet que mostrar
+    if(!forzar && this._kycVerificadoCache !== null) return this._kycVerificadoCache;
+    try{
+      const {data, error} = await sb.rpc('obtener_estado_kyc', {p_cliente_id: clienteId});
+      if(error) throw error;
+      const fila = data && data[0];
+      this._kycVerificadoCache = !!(fila && fila.kyc_verificado);
+    }catch(e){
+      this._kycVerificadoCache = false;
+    }
+    return this._kycVerificadoCache;
+  },
+  // Bloquea cualquier acción de Wallet (ver saldo, recargar, etc.) hasta
+  // que el cliente verifique su identidad. Sin este RPC no se puede
+  // continuar: no hay botón de "verificar más tarde" para la wallet.
+  gateHtml(){
+    return `<div class="card" style="max-width:480px; margin:0 auto;">
+      <div class="section-title"><h2 style="font-size:19px;">🪪 Verificación obligatoria</h2></div>
+      <p class="hint">Para ver o mover el saldo de tu wallet necesitamos confirmar tu identidad primero. Este paso es obligatorio.</p>
+      <button class="btn btn-primary btn-block btn-lg" type="button" id="btnDiditVerificarWallet" onclick="DiditKYC.startForWallet()">🪪 Verificar mi cédula automáticamente</button>
+      <p class="hint" id="walletKycStatus" style="text-align:center; margin:10px 0 0; display:none;"></p>
+    </div>`;
+  },
   async renderCliente(){
     const box = document.getElementById('u-wallet');
     if(!box) return;
@@ -7734,6 +7829,8 @@ const WalletKit = {
     if(!evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento desde "Mis tickets" para ver tu wallet.</p></div>`; return; }
     if(!evento.wallet_habilitada){ box.innerHTML = `<div class="card"><p class="hint">Este evento todavía no tiene la wallet habilitada.</p></div>`; return; }
     if(!comprador || !(comprador.correo || comprador.cedula)){ box.innerHTML = `<div class="card"><p class="hint">Completa tus datos en "Comprar tickets" (nombre, cédula, correo, teléfono) para activar tu wallet.</p></div>`; return; }
+    box.innerHTML = `<div class="hint" style="padding:20px;">Verificando tu identidad…</div>`;
+    if(!(await this.kycVerificado())){ box.innerHTML = this.gateHtml(); return; }
     box.innerHTML = `<div class="hint" style="padding:20px;">Cargando tu wallet…</div>`;
     const wallet = await this.buscarWallet(evento.id, comprador.correo || comprador.cedula);
     const movs = wallet ? await this.getMovimientos(wallet.id, 60) : [];
