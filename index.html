@@ -1177,11 +1177,13 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab active" data-tab="v-vender" onclick="VTApp.tab('v-vender')">Vender</div>
         <div class="pill-tab" data-tab="v-mis" onclick="VTApp.tab('v-mis')">Mis ventas</div>
         <div class="pill-tab" data-tab="v-wallet" onclick="VTApp.tab('v-wallet')">💳 Recargar saldo</div>
+        <div class="pill-tab" data-tab="v-taquilla" onclick="VTApp.tab('v-taquilla')">🏧 Recarga en taquilla</div>
         <div class="pill-tab" data-tab="v-chat" onclick="VTApp.tab('v-chat')">Chat con admin</div>
       </div>
       <div id="v-vender" class="tab-pane"></div>
       <div id="v-mis" class="tab-pane hide"></div>
       <div id="v-wallet" class="tab-pane hide"></div>
+      <div id="v-taquilla" class="tab-pane hide"></div>
       <div id="v-chat" class="tab-pane hide"></div>
     </section>
   </main>
@@ -5682,6 +5684,10 @@ const AdminApp = {
     const totalSaldo = wallets.reduce((a,w)=>a+Number(w.saldo||0),0);
     const negativos = wallets.filter(w=>Number(w.saldo)<0);
     box.innerHTML = `
+      <details style="margin-bottom:16px;">
+        <summary class="btn btn-primary" style="display:inline-block; cursor:pointer;">📷 Escanear cliente (recargar o cobrar)</summary>
+        <div id="a-wallets-scan" style="margin-top:12px;"></div>
+      </details>
       <div class="grid-3" style="margin-bottom:16px;">
         <div class="stat"><b>${wallets.length}</b><span>Clientes con wallet</span></div>
         <div class="stat"><b>${money(totalSaldo)}</b><span>Saldo total en circulación</span></div>
@@ -5689,10 +5695,11 @@ const AdminApp = {
       </div>
       ${pendientes.length ? `
       <div class="card" style="margin-bottom:16px;">
-        <div class="section-title"><h2 style="font-size:17px;">Recargas pendientes de aprobación (transferencia)</h2></div>
-        <div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Monto</th><th>Comprobante</th><th></th></tr></thead><tbody>
+        <div class="section-title"><h2 style="font-size:17px;">Recargas pendientes de aprobación (transferencia y taquilla)</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Método</th><th>Monto</th><th>Comprobante</th><th></th></tr></thead><tbody>
           ${pendientes.map(m=>`<tr>
             <td>${escapeHtml((m.wallets&&m.wallets.nombre)||'')}<br><span class="hint">${escapeHtml((m.wallets&&m.wallets.correo)||'')}</span></td>
+            <td>${m.metodo_pago==='taquilla' ? '🏧 Taquilla' : 'Transferencia'}</td>
             <td>${money(m.monto)}</td>
             <td>${m.comprobante_url?`<img src="${m.comprobante_url}" class="comprobante-thumb" onclick="AdminApp.zoomImg('${m.comprobante_url}')">`:'—'}</td>
             <td class="row" style="gap:6px;"><button class="btn btn-sm btn-primary" onclick="AdminApp.resolverRecargaPendiente('${m.id}',true)">Aprobar</button><button class="btn btn-sm btn-danger" onclick="AdminApp.resolverRecargaPendiente('${m.id}',false)">Rechazar</button></td>
@@ -5706,6 +5713,8 @@ const AdminApp = {
         </div>
         <div id="walletAdminLista">${this.walletsListaHtml(wallets)}</div>
       </div>`;
+    const scanBox = document.getElementById('a-wallets-scan');
+    if(scanBox) scanBox.innerHTML = await WalletKit.panelStaffHtml();
   },
   walletsListaHtml(wallets){
     if(!wallets.length) return `<p class="hint">Todavía no hay wallets creadas para este evento.</p>`;
@@ -6566,6 +6575,7 @@ const VTApp = {
   identity: null,
   evento: null,
   misTickets: [],
+  taquillaAlert: {count:0, lastId:null, revisada:true},
   async loadUserList(){
     const {data} = await sb.from('vendedores').select('*').eq('tipo','vt');
     const sel = document.getElementById('vtUser');
@@ -6583,6 +6593,7 @@ const VTApp = {
     renderEventPill(null);
     Router.go('vt');
     this.tab('v-vender');
+    this.iniciarMonitorTaquilla();
   },
   tab(name){
     document.querySelectorAll('#view-vt .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
@@ -6592,9 +6603,80 @@ const VTApp = {
     if(name==='v-mis') this.renderMis();
     if(name==='v-wallet') this.renderWallet();
     if(name==='v-chat') this.renderChat();
+    if(name==='v-taquilla'){
+      this.renderTaquilla();
+      this.taquillaAlert.revisada = true;
+      this.actualizarBadgeTaquilla();
+    }
     // Mantiene "Mis tickets vendidos" al día en tiempo real.
     AutoRefresh.stop('vt-mis');
     if(name==='v-mis') AutoRefresh.start('vt-mis', ()=>this.renderMis(), 20000);
+    AutoRefresh.stop('vt-taquilla');
+    if(name==='v-taquilla') AutoRefresh.start('vt-taquilla', ()=>this.renderTaquilla(), 20000);
+  },
+  /* ---------- Alerta de recargas "en taquilla" pendientes de cobrar ---------- */
+  iniciarMonitorTaquilla(){
+    this.checkTaquillaPendientes();
+    if(this._taquillaPollTimer) clearInterval(this._taquillaPollTimer);
+    this._taquillaPollTimer = setInterval(()=>this.checkTaquillaPendientes(), 20000);
+    if(this._taquillaBellTimer) clearInterval(this._taquillaBellTimer);
+    this._taquillaBellTimer = setInterval(()=>{
+      if(Auth.role!=='vt') return;
+      if(this.taquillaAlert.count>0 && !this.taquillaAlert.revisada){ beepAlert(); speak('Tienes recarga de saldo en taquilla'); }
+    }, 15000);
+  },
+  async checkTaquillaPendientes(){
+    if(Auth.role!=='vt') return;
+    if(!this.evento){ this.taquillaAlert = {count:0,lastId:null,revisada:true}; this.actualizarBadgeTaquilla(); return; }
+    const {data, count} = await sb.from('wallet_movimientos').select('id,created_at',{count:'exact'}).eq('evento_id', this.evento.id).eq('tipo','recarga').eq('estado','pendiente').eq('metodo_pago','taquilla').order('created_at',{ascending:false}).limit(1);
+    const total = count || 0;
+    const newestId = data && data[0] ? data[0].id : null;
+    if(total>0 && newestId !== this.taquillaAlert.lastId){
+      this.taquillaAlert.lastId = newestId;
+      this.taquillaAlert.revisada = false;
+      beepAlert(); speak('Tienes recarga de saldo en taquilla');
+    }
+    if(total===0){ this.taquillaAlert.lastId = null; this.taquillaAlert.revisada = true; }
+    this.taquillaAlert.count = total;
+    this.actualizarBadgeTaquilla();
+  },
+  actualizarBadgeTaquilla(){
+    const tabEl = document.querySelector('#view-vt .pill-tab[data-tab="v-taquilla"]');
+    if(!tabEl) return;
+    tabEl.classList.toggle('tab-alert', this.taquillaAlert.count>0 && !this.taquillaAlert.revisada);
+  },
+  async renderTaquilla(){
+    const box = document.getElementById('v-taquilla');
+    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Elige primero un evento en la pestaña "Vender".</p></div>`; return; }
+    const pendientes = await WalletKit.getPendientes(this.evento.id, 'taquilla');
+    box.innerHTML = `
+      <div class="card">
+        <div class="section-title"><h2 style="font-size:19px;">🏧 Recargas en taquilla por cobrar</h2></div>
+        <p class="hint">Estos clientes pidieron recargar saldo pagando en efectivo aquí en taquilla. Cóbrales el monto y luego dale "Aprobar" para acreditarles el saldo.</p>
+        ${!pendientes.length ? `<p class="hint" style="margin-top:12px;">No hay recargas de taquilla pendientes por ahora.</p>` : `
+        <div class="table-wrap" style="margin-top:12px;"><table><thead><tr><th>Cliente</th><th>Monto a cobrar</th><th></th></tr></thead><tbody>
+          ${pendientes.map(m=>`<tr>
+            <td>${escapeHtml((m.wallets&&m.wallets.nombre)||'')}<br><span class="hint">${escapeHtml((m.wallets&&m.wallets.correo)||'')} ${(m.wallets&&m.wallets.cedula)?'· '+escapeHtml(m.wallets.cedula):''}</span></td>
+            <td style="font-family:'Orbitron',sans-serif;">${money(m.monto)}</td>
+            <td class="row" style="gap:6px;"><button class="btn btn-sm btn-primary" onclick="VTApp.resolverTaquilla('${m.id}',true)">✅ Cobrado, aprobar</button><button class="btn btn-sm btn-danger" onclick="VTApp.resolverTaquilla('${m.id}',false)">Rechazar</button></td>
+          </tr>`).join('')}
+        </tbody></table></div>`}
+      </div>`;
+  },
+  async resolverTaquilla(movimientoId, aprobar){
+    try{
+      await WalletKit.resolverPendiente(movimientoId, aprobar, this.identity ? ('VT · '+this.identity.usuario) : 'VT');
+      toast(aprobar ? 'Saldo acreditado' : 'Solicitud rechazada');
+      this.renderTaquilla();
+      this.checkTaquillaPendientes();
+    }catch(err){
+      toast('No se pudo resolver: '+(err.message||err), true);
+    }
+  },
+  // Escribe el código del ticket en una pulsera/tag NFC en blanco para que
+  // también pueda validarse por NFC en la puerta (no solo con el QR).
+  async vincularNFC(codigo){
+    await WalletKit.escribirNFC(codigo);
   },
   // Deja que el vendedor escoja de qué evento quiere vender tickets antes
   // de mostrar el formulario de venta.
@@ -6623,11 +6705,13 @@ const VTApp = {
     this.evento = evento;
     renderEventPill(evento);
     this.renderVender();
+    this.checkTaquillaPendientes();
   },
   cambiarEvento(){
     this.evento = null;
     renderEventPill(null);
     this.renderVender();
+    this.checkTaquillaPendientes();
   },
   async renderVender(){
     if(!this.evento){ this.renderEventoPicker(); return; }
@@ -7026,8 +7110,8 @@ const VTApp = {
       </div>
       <div class="card">
         <div class="section-title"><h2 style="font-size:19px;">Total vendido: ${money(total)}</h2></div>
-        <div class="table-wrap" style="margin-top:16px;"><table><thead><tr><th>Código</th><th>Cliente</th><th>Categoría</th><th>Precio</th><th>Pago</th></tr></thead>
-        <tbody>${this.misTickets.map(t=>`<tr><td class="mono">${escapeHtml(t.codigo)}</td><td>${escapeHtml(t.nombre_cliente||'')}</td><td>${escapeHtml(t.categoria)}</td><td>${money(t.precio)}</td><td>${escapeHtml(t.tipo_pago)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="table-wrap" style="margin-top:16px;"><table><thead><tr><th>Código</th><th>Cliente</th><th>Categoría</th><th>Precio</th><th>Pago</th><th></th></tr></thead>
+        <tbody>${this.misTickets.map(t=>`<tr><td class="mono">${escapeHtml(t.codigo)}</td><td>${escapeHtml(t.nombre_cliente||'')}</td><td>${escapeHtml(t.categoria)}</td><td>${money(t.precio)}</td><td>${escapeHtml(t.tipo_pago)}</td><td>${('NDEFReader' in window) ? `<button class="btn btn-sm" onclick="VTApp.vincularNFC('${escapeHtml(t.codigo)}')" title="Vincular este ticket a una pulsera NFC">📶 Vincular NFC</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
       </div>`;
   },
   renderChat(){
@@ -7135,9 +7219,30 @@ const WalletKit = {
     const {data} = await sb.from('wallet_movimientos').select('*').eq('wallet_id', walletId).order('created_at',{ascending:false}).limit(limit||60);
     return data || [];
   },
-  async getPendientes(eventoId){
-    const {data} = await sb.from('wallet_movimientos').select('*, wallets(nombre,correo,cedula)').eq('evento_id', eventoId).eq('tipo','recarga').eq('estado','pendiente').order('created_at',{ascending:false});
+  async getPendientes(eventoId, metodoPago){
+    let q = sb.from('wallet_movimientos').select('*, wallets(nombre,correo,cedula)').eq('evento_id', eventoId).eq('tipo','recarga').eq('estado','pendiente');
+    if(metodoPago) q = q.eq('metodo_pago', metodoPago);
+    const {data} = await q.order('created_at',{ascending:false});
     return data || [];
+  },
+  // Recarga que el cliente pide pagar EN EFECTIVO en la taquilla del evento
+  // (no es una transferencia ni Bold): queda "pendiente" igual que una
+  // transferencia, pero el vendedor la ve y la aprueba desde su propia
+  // pestaña "Recarga en taquilla" al recibir el efectivo en mano.
+  async solicitarTaquilla(){
+    const comprador = UsuarioApp.compra && UsuarioApp.compra.comprador;
+    const evento = UsuarioApp.eventoActual();
+    const monto = Number(document.getElementById('wcMonto').value);
+    if(!comprador || !comprador.correo){ toast('Completa tus datos primero', true); return; }
+    if(!monto || monto<1000){ toast('Ingresa un monto válido (mínimo $1.000)', true); return; }
+    try{
+      await this.registrarPendiente({evento_id:evento.id, correo:comprador.correo, cedula:comprador.cedula, nombre:comprador.nombre, telefono:comprador.telefono, monto, metodo_pago:'taquilla'});
+      document.getElementById('walletRecargaModal')?.remove();
+      toast('Listo. Acércate a la taquilla del evento con tu cédula y paga en efectivo para que te acrediten el saldo.');
+      this.renderCliente();
+    }catch(err){
+      toast('No se pudo registrar la solicitud: '+(err.message||err), true);
+    }
   },
   async listWallets(eventoId){
     const {data} = await sb.from('wallets').select('*').eq('evento_id', eventoId).order('saldo', {ascending:true});
@@ -7235,6 +7340,8 @@ const WalletKit = {
           <div class="field"><label>Monto a recargar (COP)</label><input id="wcMonto" type="number" min="1000" step="1000" placeholder="ej: 50000"></div>
           <button class="btn btn-primary btn-block" id="wcBoldBtn" onclick="WalletKit.pagarConBoldCliente()">💳 Pagar con Bold (tarjeta, PSE, Nequi)</button>
           <p class="hint" style="text-align:center; margin-top:6px;">El saldo queda disponible apenas el banco confirme el pago.</p>
+          <button class="btn btn-block" style="margin-top:10px;" onclick="WalletKit.solicitarTaquilla()">🏧 Pagar en efectivo en la taquilla</button>
+          <p class="hint" style="text-align:center; margin-top:6px;">Acércate a la taquilla del evento con tu cédula y paga en efectivo; el vendedor te acredita el saldo ahí mismo.</p>
           <details style="margin-top:16px;">
             <summary class="hint" style="cursor:pointer;">Otro método (transferencia manual)</summary>
             ${evento && evento.mapa && evento.mapa.pago_qr ? `<div class="pago-qr-box"><img src="${evento.mapa.pago_qr}"></div><p class="hint" style="text-align:center;">Escanea el código QR para pagar</p>` : `<p class="hint" style="margin-top:12px;">El administrador aún no ha configurado un QR de pago.</p>`}
@@ -7361,10 +7468,29 @@ const WalletKit = {
       </div>`;
   },
   _staffCtx(){
-    // Detecta si quien llama es QRApp o VTApp para saber evento/identidad/dónde re-renderizar.
+    // Detecta si quien llama es QRApp, VTApp o el propio AdminApp (que
+    // también puede escanear/cobrar/recargar desde su pestaña "Wallets"),
+    // para saber evento/identidad/dónde re-renderizar.
     if(Auth.role==='qr') return {app:QRApp, tabId:'q-wallet', tipo:'QR'};
     if(Auth.role==='vt') return {app:VTApp, tabId:'v-wallet', tipo:'VT'};
+    if(Auth.role==='admin') return {app:AdminApp, tabId:'a-wallets', tipo:'Admin'};
     return {app:null, tabId:null, tipo:''};
+  },
+  // Escribe el código del ticket en un tag/pulsera NFC en blanco, para que
+  // luego pueda validarse en la puerta también acercando la pulsera (no
+  // solo con el QR). Lo usa el vendedor justo después de vender el ticket.
+  async escribirNFC(codigo){
+    if(!('NDEFReader' in window)){ toast('Este dispositivo/navegador no soporta escritura NFC (usa Chrome en Android)', true); return false; }
+    try{
+      const writer = new NDEFReader();
+      toast('Acerca el tag/pulsera NFC en blanco para vincularlo…');
+      await writer.write({records:[{recordType:'text', data: String(codigo)}]});
+      toast('¡Pulsera NFC vinculada! Ya puede usarse para validar la entrada.');
+      return true;
+    }catch(e){
+      toast('No se pudo escribir en el NFC: '+(e.message||e), true);
+      return false;
+    }
   },
   async staffScanQR(){
     const box = document.getElementById('walletStaffScanBox');
@@ -7424,9 +7550,13 @@ const WalletKit = {
     box.innerHTML = `
       <div style="max-width:420px; margin:0 auto 16px;">${this.cardHtml(wallet, evento, cliente)}</div>
       <div class="card" style="max-width:420px; margin:0 auto;">
-        <div class="field"><label>Monto a recargar (COP)</label><input id="walletStaffMonto" type="number" min="1000" step="1000" placeholder="ej: 20000"></div>
+        <div class="field"><label>Monto (COP)</label><input id="walletStaffMonto" type="number" min="1000" step="1000" placeholder="ej: 20000"></div>
         <div class="field"><label>Método</label><select id="walletStaffMetodo"><option value="efectivo">Efectivo</option><option value="nfc">Datafono / tarjeta (NFC)</option></select></div>
-        <button class="btn btn-primary btn-block" onclick="WalletKit.staffConfirmarRecarga()">➕ Confirmar recarga</button>
+        <div class="row" style="gap:8px;">
+          <button class="btn btn-primary" style="flex:1;" onclick="WalletKit.staffConfirmarMovimiento('recarga')">➕ Recargar</button>
+          <button class="btn btn-danger" style="flex:1;" onclick="WalletKit.staffConfirmarMovimiento('consumo')">➖ Cobrar</button>
+        </div>
+        <p class="hint" style="margin-top:8px;">"Cobrar" descuenta el monto del saldo del cliente (ej: una compra en barra/tienda).</p>
       </div>`;
   },
   // Variante usada dentro del overlay de resultado de escaneo (QRApp.showResult):
@@ -7445,9 +7575,12 @@ const WalletKit = {
         <div class="field" style="flex:1; max-width:140px;"><input id="qrWalletMonto" type="number" min="1000" step="1000" placeholder="Monto"></div>
         <div class="field" style="flex:1; max-width:150px;"><select id="qrWalletMetodo"><option value="efectivo">Efectivo</option><option value="nfc">Datafono</option></select></div>
       </div>
-      <button class="btn btn-primary btn-block" onclick="WalletKit.confirmarRecargaOverlay()">➕ Confirmar recarga</button>`;
+      <div class="row" style="gap:8px;">
+        <button class="btn btn-primary" style="flex:1;" onclick="WalletKit.confirmarMovimientoOverlay('recarga')">➕ Recargar</button>
+        <button class="btn btn-danger" style="flex:1;" onclick="WalletKit.confirmarMovimientoOverlay('consumo')">➖ Cobrar</button>
+      </div>`;
   },
-  async confirmarRecargaOverlay(){
+  async confirmarMovimientoOverlay(tipo){
     const cliente = this._overlayCliente;
     if(!cliente) return;
     const monto = Number(document.getElementById('qrWalletMonto').value);
@@ -7456,17 +7589,19 @@ const WalletKit = {
     try{
       await this.ajustar({
         evento_id: cliente.evento_id, correo: cliente.correo, cedula: cliente.cedula, nombre: cliente.nombre, telefono: cliente.telefono,
-        monto, tipo:'recarga', metodo_pago: metodo,
+        monto, tipo, metodo_pago: metodo,
         registrado_por: (Auth.role==='qr'&&QRApp.identity) ? ('QR · '+QRApp.identity.usuario) : ((Auth.role==='vt'&&VTApp.identity) ? ('VT · '+VTApp.identity.usuario) : ''),
-        descripcion: 'Recarga al escanear ticket/pulsera NFC'
+        descripcion: tipo==='consumo' ? 'Cobro al escanear ticket/pulsera NFC' : 'Recarga al escanear ticket/pulsera NFC'
       });
-      toast('Saldo recargado correctamente');
+      toast(tipo==='consumo' ? 'Cobro registrado correctamente' : 'Saldo recargado correctamente');
       await this.staffMostrarClienteEnOverlay(cliente.evento_id, cliente, null);
     }catch(err){
-      toast('No se pudo recargar: '+(err.message||err), true);
+      toast('No se pudo registrar: '+(err.message||err), true);
     }
   },
-  async staffConfirmarRecarga(){
+  // tipo: 'recarga' (suma saldo) o 'consumo' (cobra/descuenta saldo — ej.
+  // una compra en barra/tienda pagada con la wallet del cliente).
+  async staffConfirmarMovimiento(tipo){
     const ctx = this._staffCtx();
     const cliente = this._staffCliente;
     if(!cliente){ toast('Busca primero al cliente', true); return; }
@@ -7476,14 +7611,14 @@ const WalletKit = {
     try{
       await this.ajustar({
         evento_id: cliente.evento_id, correo: cliente.correo, cedula: cliente.cedula, nombre: cliente.nombre, telefono: cliente.telefono,
-        monto, tipo:'recarga', metodo_pago: metodo,
+        monto, tipo, metodo_pago: metodo,
         registrado_por: ctx.app && ctx.app.identity ? (ctx.tipo+' · '+ctx.app.identity.usuario) : ctx.tipo,
-        descripcion: 'Recarga en punto de atención'
+        descripcion: tipo==='consumo' ? 'Cobro en punto de atención' : 'Recarga en punto de atención'
       });
-      toast('Saldo recargado correctamente');
+      toast(tipo==='consumo' ? 'Cobro registrado correctamente' : 'Saldo recargado correctamente');
       await this.staffMostrarCliente(cliente.evento_id, cliente);
     }catch(err){
-      toast('No se pudo recargar: '+(err.message||err), true);
+      toast('No se pudo registrar: '+(err.message||err), true);
     }
   }
 };
@@ -7617,10 +7752,9 @@ async function checkBoldReturn(){
 }
 
 // Equivalente a checkBoldReturn() pero para una recarga de saldo de wallet
-// (orden creada por bold-crear-orden-wallet). Verifica el pago con el mismo
-// endpoint bold-verificar-pago y luego confirma que el webhook ya haya
-// acreditado el movimiento en wallet_movimientos (vía wallet_acreditar_bold)
-// antes de mostrar "saldo acreditado".
+// (orden creada por bold-crear-orden-wallet). Usa un endpoint DISTINTO,
+// bold-verificar-pago-wallet, para no tocar el bold-verificar-pago que ya
+// usa la compra de tickets.
 async function checkBoldReturnWallet(orderId){
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-bg" id="boldResultModal">
@@ -7633,13 +7767,9 @@ async function checkBoldReturnWallet(orderId){
 
   let estado = 'pendiente_pago';
 
-  // bold-verificar-pago ahora también sabe consultar wallet_recargas_bold
-  // (además de solicitudes_compra), así que basta con leer "estado" de su
-  // respuesta — igual que hace el flujo de compra de tickets — sin volver a
-  // consultar wallet_movimientos por separado desde aquí.
   for(let i=0;i<10;i++){
     try{
-      const res = await fetch(EDGE_FUNCTIONS_URL + '/bold-verificar-pago?order_id=' + encodeURIComponent(orderId), {
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/bold-verificar-pago-wallet?order_id=' + encodeURIComponent(orderId), {
         headers: {'Authorization':'Bearer '+SUPA_KEY, 'apikey':SUPA_KEY}
       });
       const data = await res.json().catch(()=>({}));
