@@ -998,6 +998,27 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       </div>
     </section>
 
+    <!-- ============ LOGIN: VERIFICACIÓN KYC OBLIGATORIA (cuenta nueva o sin verificar) ============ -->
+    <section id="view-login-cliente-kyc-gate" class="hide">
+      <div class="auth-shell client-auth-shell">
+        <span class="back" onclick="ClienteAuth.backToEventOrLanding()">‹ volver</span>
+        <div class="client-auth-event" id="clientKycGateEvent"></div>
+        <div class="card client-auth-card">
+          <div class="section-title"><h2>Verifica tu identidad</h2></div>
+          <p class="hint client-auth-subtitle">Por seguridad, la primera vez que ingresas necesitamos confirmar que la cédula corresponde a tu rostro.</p>
+          <div class="client-kyc-box" id="clientKycGateBox">
+            <button class="btn btn-primary btn-block btn-lg" type="button" id="btnDiditVerificarLogin" onclick="DiditKYC.startForLogin()">🪪 Verificar mi cédula automáticamente</button>
+            <p class="hint" style="text-align:center; margin:10px 0 0;">Escanea tu documento y tu rostro; toma menos de un minuto.</p>
+            <p class="hint" id="loginKycStatus" style="text-align:center; margin:6px 0 0; display:none;"></p>
+          </div>
+          <div class="client-auth-actions" style="margin-top:16px;">
+            <button class="client-auth-link" type="button" onclick="ClienteAuth.skipKycAndContinue()">Verificar más tarde y continuar</button>
+          </div>
+          <div class="client-auth-note">Tus datos de verificación se procesan de forma segura y solo se usan para confirmar tu identidad.</div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ REGISTRO: CLIENTE NUEVO ============ -->
     <section id="view-login-cliente-register" class="hide">
       <div class="auth-shell client-auth-shell">
@@ -2235,9 +2256,12 @@ const BiometricAuth = {
    Ver instrucciones aparte para desplegarlas y la migración SQL.
 ========================================================= */
 const DIDIT_PENDING_KEY = 'glm_didit_pending';
+// Cuenta con acceso de cliente pendiente de pasar por el gate de KYC de login
+// (se guarda antes de redirigir a Didit, para poder retomar el login al volver).
+const DIDIT_LOGIN_PENDING_KEY = 'glm_didit_login_pending';
 const DiditKYC = {
-  _setStatusMsg(msg, isError){
-    const el = document.getElementById('clientKycStatus');
+  _setStatusMsg(msg, isError, elId){
+    const el = document.getElementById(elId || 'clientKycStatus');
     if(!el) return;
     el.style.display = msg ? 'block' : 'none';
     el.textContent = msg || '';
@@ -2267,11 +2291,46 @@ const DiditKYC = {
         return;
       }
       sessionStorage.setItem(DIDIT_PENDING_KEY, JSON.stringify({
-        session_id: data.session_id, vendor_data: vendorRef, evento_id: this.pendingEventoIdSafe()
+        session_id: data.session_id, vendor_data: vendorRef, evento_id: this.pendingEventoIdSafe(), contexto: 'registro_cliente'
       }));
       location.href = data.url;
     }catch(err){
       this._setStatusMsg('No se pudo iniciar la verificación: ' + (err.message||err), true);
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = '🪪 Verificar mi cédula automáticamente'; }
+    }
+  },
+  // Inicia una sesión de verificación para una cuenta de cliente que ya
+  // existe (login) pero que es nueva o nunca ha completado el KYC. Usa el
+  // id real del cliente como vendor_data, para poder marcarlo verificado
+  // apenas Didit confirme la sesión como aprobada.
+  async startForLogin(){
+    const customer = ClienteAuth.pendingKycCustomer;
+    if(!customer || !customer.id){ toast('No hay una cuenta pendiente de verificar.', true); return; }
+    const btn = document.getElementById('btnDiditVerificarLogin');
+    if(btn){ btn.disabled = true; btn.textContent = 'Preparando verificación...'; }
+    this._setStatusMsg('', false, 'loginKycStatus');
+    try{
+      const callback = location.origin + location.pathname + '?didit-return=1';
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/didit-crear-sesion', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
+        body: JSON.stringify({ vendor_data: String(customer.id), correo: customer.correo||'', callback, contexto: 'login_cliente' })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error || !data.url){
+        this._setStatusMsg('No se pudo iniciar la verificación: ' + (data.error || 'intenta de nuevo'), true, 'loginKycStatus');
+        return;
+      }
+      sessionStorage.setItem(DIDIT_LOGIN_PENDING_KEY, JSON.stringify({
+        session_id: data.session_id, cliente_id: customer.id, evento_id: this.pendingEventoIdSafe(), contexto: 'login_cliente'
+      }));
+      sessionStorage.setItem(DIDIT_PENDING_KEY, JSON.stringify({
+        session_id: data.session_id, vendor_data: String(customer.id), evento_id: this.pendingEventoIdSafe(), contexto: 'login_cliente'
+      }));
+      location.href = data.url;
+    }catch(err){
+      this._setStatusMsg('No se pudo iniciar la verificación: ' + (err.message||err), true, 'loginKycStatus');
     }finally{
       if(btn){ btn.disabled = false; btn.textContent = '🪪 Verificar mi cédula automáticamente'; }
     }
@@ -2281,8 +2340,9 @@ const DiditKYC = {
   },
   // Se llama en el arranque de la app (junto a checkBoldReturn) cuando la
   // URL trae "?didit-return=1": consulta el estado de la sesión pendiente
-  // guardada en sessionStorage y, si quedó aprobada, autocompleta nombre y
-  // cédula en el formulario de registro con los datos leídos del documento.
+  // guardada en sessionStorage y, según el contexto en que se inició
+  // (registro de cliente nuevo o gate de KYC en el login), retoma el flujo
+  // correspondiente.
   async checkPendingReturn(){
     const params = new URLSearchParams(location.search);
     if(params.get('didit-return') !== '1') return;
@@ -2291,22 +2351,19 @@ const DiditKYC = {
     try{ pending = JSON.parse(sessionStorage.getItem(DIDIT_PENDING_KEY) || 'null'); }catch(e){}
     if(!pending || !pending.session_id) return;
 
+    if(pending.contexto === 'login_cliente'){
+      await this._resolveLoginReturn(pending);
+      return;
+    }
+    await this._resolveRegisterReturn(pending);
+  },
+  async _resolveRegisterReturn(pending){
     const evento = pending.evento_id ? await (async()=>{ try{ const {data}=await sb.from('eventos').select('*').eq('id',pending.evento_id).limit(1); return data&&data[0]; }catch(e){ return null; } })() : null;
     if(evento) ClienteAuth.setPendingEvento(evento);
     ClienteAuth.showRegister();
     this._setStatusMsg('Confirmando tu verificación, esto puede tardar unos segundos...');
 
-    let resultado = null;
-    for(let i=0;i<10;i++){
-      try{
-        const res = await fetch(EDGE_FUNCTIONS_URL + '/didit-verificar-estado?session_id=' + encodeURIComponent(pending.session_id), {
-          headers:{'Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY}
-        });
-        const data = await res.json().catch(()=>({}));
-        if(data.status === 'Approved' || data.status === 'Declined' || data.status === 'error'){ resultado = data; break; }
-      }catch(e){}
-      await new Promise(r=>setTimeout(r, 2500));
-    }
+    const resultado = await this._pollSession(pending.session_id);
     sessionStorage.removeItem(DIDIT_PENDING_KEY);
 
     if(!resultado || resultado.status !== 'Approved'){
@@ -2319,6 +2376,62 @@ const DiditKYC = {
     if(cedulaEl && resultado.cedula) cedulaEl.value = resultado.cedula;
     this._verifiedSessionId = pending.session_id;
     this._setStatusMsg('✅ Identidad verificada. Revisa tus datos y termina de crear tu cuenta.');
+  },
+  async _resolveLoginReturn(pending){
+    let loginPending = null;
+    try{ loginPending = JSON.parse(sessionStorage.getItem(DIDIT_LOGIN_PENDING_KEY) || 'null'); }catch(e){}
+    const clienteId = (loginPending && loginPending.cliente_id) || pending.vendor_data;
+
+    const evento = pending.evento_id ? await (async()=>{ try{ const {data}=await sb.from('eventos').select('*').eq('id',pending.evento_id).limit(1); return data&&data[0]; }catch(e){ return null; } })() : null;
+    if(evento) ClienteAuth.setPendingEvento(evento);
+
+    // Recupera el cliente para poder mostrar el gate/continuar el login.
+    // Usa un RPC (no un select directo a la tabla) para que funcione igual
+    // que validar_cliente/crear_cliente bajo RLS con la anon key. Requiere
+    // crear este RPC en Supabase junto con marcar_cliente_verificado, p. ej.:
+    //   create function obtener_cliente_por_id(p_cliente_id uuid)
+    //   returns setof clientes language sql security definer as
+    //   $$ select * from clientes where id = p_cliente_id $$;
+    let customer = null;
+    try{
+      const {data} = await sb.rpc('obtener_cliente_por_id', {p_cliente_id: clienteId});
+      customer = data && data[0];
+    }catch(e){}
+    if(!customer){
+      toast('No se pudo recuperar tu cuenta tras la verificación. Inicia sesión de nuevo.', true);
+      Router.go('login-usuario');
+      return;
+    }
+    ClienteAuth.pendingKycCustomer = customer;
+    Router.go('login-cliente-kyc-gate');
+    this._setStatusMsg('Confirmando tu verificación, esto puede tardar unos segundos...', false, 'loginKycStatus');
+
+    const resultado = await this._pollSession(pending.session_id);
+    sessionStorage.removeItem(DIDIT_PENDING_KEY);
+    sessionStorage.removeItem(DIDIT_LOGIN_PENDING_KEY);
+
+    if(!resultado || resultado.status !== 'Approved'){
+      this._setStatusMsg('No alcanzamos a confirmar la verificación. Puedes intentarlo de nuevo o continuar sin verificar por ahora.', true, 'loginKycStatus');
+      return;
+    }
+    try{ await sb.rpc('marcar_cliente_verificado',{p_cliente_id:customer.id,p_kyc_session_id:pending.session_id}); }catch(e){}
+    customer.kyc_verificado = true;
+    this._setStatusMsg('✅ Identidad verificada.', false, 'loginKycStatus');
+    await ClienteAuth.continueToPurchase(customer, evento || await ClienteAuth.getPendingEvento());
+  },
+  async _pollSession(sessionId){
+    let resultado = null;
+    for(let i=0;i<10;i++){
+      try{
+        const res = await fetch(EDGE_FUNCTIONS_URL + '/didit-verificar-estado?session_id=' + encodeURIComponent(sessionId), {
+          headers:{'Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY}
+        });
+        const data = await res.json().catch(()=>({}));
+        if(data.status === 'Approved' || data.status === 'Declined' || data.status === 'error'){ resultado = data; break; }
+      }catch(e){}
+      await new Promise(r=>setTimeout(r, 2500));
+    }
+    return resultado;
   }
 };
 
@@ -2364,6 +2477,29 @@ const ClienteAuth = {
     Router.go('login-cliente-register'); setTimeout(()=>document.getElementById('clientRegisterName')?.focus(),40);
   },
   clearKycStatus(){ DiditKYC._setStatusMsg(''); },
+  pendingKycCustomer: null,
+  // Cuenta nueva o que nunca completó el KYC de Didit: en vez de continuar
+  // directo a la compra, se manda al gate de verificación. El campo
+  // kyc_verificado lo debe devolver el RPC validar_cliente (o el select de
+  // abajo si no lo trae) — ver migración SQL de marcar_cliente_verificado.
+  needsKycGate(customer){
+    return !customer || !customer.kyc_verificado;
+  },
+  showKycGate(customer, evento){
+    this.pendingKycCustomer = customer;
+    this.setPendingEvento(evento);
+    DiditKYC._setStatusMsg('', false, 'loginKycStatus');
+    const html = evento ? `Evento seleccionado: <b>${escapeHtml(evento.nombre||'')}</b>` : '';
+    const el = document.getElementById('clientKycGateEvent'); if(el) el.innerHTML = html;
+    Router.go('login-cliente-kyc-gate');
+  },
+  // El usuario elige no verificar todavía: continúa a la compra igual,
+  // pero seguirá viendo el gate en su próximo login mientras no se verifique.
+  skipKycAndContinue(){
+    const customer = this.pendingKycCustomer, evento = this.pendingEvento;
+    if(!customer || !evento){ Router.go('landing'); return; }
+    this.continueToPurchase(customer, evento);
+  },
   showRecovery(){
     const loginEmail=document.getElementById('clientEmail')?.value?.trim()||'';
     const recoveryEmail=document.getElementById('clientRecoveryEmail'); if(recoveryEmail&&loginEmail) recoveryEmail.value=loginEmail;
@@ -2385,7 +2521,14 @@ const ClienteAuth = {
       if(error){toast('No se pudo validar el cliente: '+error.message,true);return;}
       const customer=data&&data[0];
       if(!customer){toast('Correo o contraseña incorrectos.',true);return;}
-      this.pendingCustomer=customer; await this.continueToPurchase(customer,evento);
+      this.pendingCustomer=customer;
+      // Cuenta nueva o que aún no completó el KYC de Didit: se exige
+      // verificar identidad antes de continuar (ver DiditKYC.startForLogin).
+      if(this.needsKycGate(customer)){
+        this.showKycGate(customer, evento);
+        return;
+      }
+      await this.continueToPurchase(customer,evento);
       // Ofrece activar huella/Face ID en este dispositivo tras un login exitoso
       BiometricAuth.offerActivationAfterLogin(email, password);
     }finally{if(btn){btn.disabled=false;btn.textContent='Ingresar';}}
@@ -2444,7 +2587,15 @@ const ClienteAuth = {
   finishRegistration(){
     const evento=this.pendingEvento, customer=this.pendingCustomer;
     if(!evento||!customer){Router.go('landing');return;}
-    this.pendingRecoveryCode=null; this.continueToPurchase(customer,evento);
+    this.pendingRecoveryCode=null;
+    // Cuenta recién creada: si no quedó verificada durante el registro
+    // (p. ej. porque llenó los datos a mano en vez de usar Didit), se
+    // exige el KYC antes de dejarla continuar, igual que en login().
+    if(this.needsKycGate(customer)){
+      this.showKycGate(customer, evento);
+      return;
+    }
+    this.continueToPurchase(customer,evento);
   },
   async continueToPurchase(customer,evento){
     const email=customer.correo||'';
