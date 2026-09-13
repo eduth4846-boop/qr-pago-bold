@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://ukmmrbjmeumjkxdblmgc.supabase.co">
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 <!-- qrcodejs y html5-qrcode ya NO se cargan aquí: se cargan bajo demanda (ver loadScriptOnce) solo cuando
@@ -140,11 +141,27 @@ button{font-family:inherit;}
 @media (prefers-reduced-motion: reduce){
   #bg-fx .glow, #bg-fx .grid, #bg-fx .scanline{ animation:none !important; }
 }
+/* ---------- modo "ligero" de fondo fuera del landing ----------
+   Los glows con blur() animados + el canvas de partículas + el grid en
+   movimiento son, juntos, el mayor costo de GPU/CPU de toda la página.
+   Vistos detrás del landing (marketing) valen la pena; detrás de un
+   formulario, el panel admin o el escáner QR, casi no se notan y solo
+   restan fluidez. Por eso se apagan/"congelan" en cuanto se navega a
+   cualquier otra pantalla (ver Router.go / BgFxControl). */
+body.bg-fx-lite #vecCanvas{display:none;}
+body.bg-fx-lite #bg-fx .glow{animation:none; filter:blur(34px); opacity:.28;}
+body.bg-fx-lite #bg-fx .grid{animation:none;}
+body.bg-fx-lite #bg-fx .scanline{display:none;}
+body.bg-fx-lite #bgVideo,
+body.bg-fx-lite #bgVideoShade{opacity:0 !important;}
+body.bg-fx-lite .topbar{backdrop-filter:none;}
 #cursor-glow{
   position:fixed; z-index:2; width:340px; height:340px; border-radius:50%; pointer-events:none;
   background:radial-gradient(circle, rgba(157,77,255,.16), rgba(255,46,224,.08) 40%, transparent 70%);
-  transform:translate(-50%,-50%); left:50%; top:50%; transition:opacity .3s; opacity:0;
+  left:0; top:0; transition:opacity .3s; opacity:0;
+  transform:translate3d(-9999px,-9999px,0);
   filter:blur(4px);
+  will-change:transform;
 }
 
 /* ---------- layout shell ---------- */
@@ -974,6 +991,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
           <div class="client-auth-actions">
             <button class="client-auth-link" type="button" onclick="ClienteAuth.showRecovery()">¿Olvidaste tu contraseña?</button>
             <button class="client-auth-new" type="button" onclick="ClienteAuth.showRegister()">Soy cliente nuevo</button>
+            <button class="client-auth-link" type="button" onclick="DiditKYC.startForRegister()">🪪 Soy nuevo y quiero verificar mi cédula automáticamente</button>
           </div>
           <div class="client-auth-note">Tu acceso se usa únicamente para la experiencia de cliente. La huella o Face ID solo se usa para desbloquear el acceso guardado en este dispositivo; nunca se envía a nuestros servidores.</div>
         </div>
@@ -2025,6 +2043,11 @@ const Router = {
     if(target) target.classList.remove('hide');
     this.current = view;
     window.scrollTo({top:0, behavior:'smooth'});
+    // El fondo animado (partículas, glows con blur, grid, video) solo se
+    // muestra a toda intensidad en el landing; en el resto de pantallas
+    // (formularios, admin, escáner QR, punto de venta...) se apaga para no
+    // robarle fotogramas a la interfaz real. Ver BgFxControl en NEON FX.
+    if(typeof BgFxControl !== 'undefined') BgFxControl.setLite(view !== 'landing');
     if(view==='login-qr') QRApp.loadUserList();
     if(view==='login-vt') VTApp.loadUserList();
     if(view==='landing') EventSlider.load();
@@ -7946,6 +7969,7 @@ async function checkBoldReturnWallet(orderId){
   var COLORS = ['#ff2ee0', '#00f0ff', '#9d4dff', '#c6ff3a'];
   var mouse = {x:-9999, y:-9999};
   var running = !document.hidden;
+  var bgLite = false;
   var lastFrame = 0;
   var FRAME_MS = 1000/30;
 
@@ -7970,7 +7994,7 @@ async function checkBoldReturnWallet(orderId){
 
   function step(ts){
     requestAnimationFrame(step);
-    if(!running || !nodes.length) return;
+    if(!running || bgLite || !nodes.length) return;
     if(ts - lastFrame < FRAME_MS) return;
     lastFrame = ts;
     ctx.clearRect(0,0,W,H);
@@ -8042,13 +8066,36 @@ async function checkBoldReturnWallet(orderId){
     running = !document.hidden;
   });
 
+  // Control global usado por Router.go: cuando se navega fuera del landing,
+  // se apaga por completo el canvas de partículas (bgLite) y CSS se encarga
+  // de congelar/ocultar los glows, el grid y el video (ver .bg-fx-lite).
+  window.BgFxControl = {
+    setLite(isLite){
+      bgLite = !!isLite;
+      if(bgLite) ctx.clearRect(0,0,W,H);
+      document.body.classList.toggle('bg-fx-lite', bgLite);
+      const video = document.getElementById('bgVideo');
+      if(video){ if(bgLite) video.pause(); else if(video.dataset.src) video.play().catch(()=>{}); }
+    }
+  };
+
   // --- Spotlight interactivo que sigue el cursor ---
+  // Se actualiza a lo sumo una vez por frame (rAF) y con transform en vez de
+  // left/top, para no forzar recálculo de layout en cada pointermove (que en
+  // algunos dispositivos dispara decenas de eventos por segundo).
   var glow = document.getElementById('cursor-glow');
   var glowVisible = false;
+  var pendingGlow = null, glowQueued = false;
+  function flushGlow(){
+    glowQueued = false;
+    if(!pendingGlow) return;
+    glow.style.transform = 'translate3d(' + pendingGlow.x + 'px,' + pendingGlow.y + 'px,0) translate(-50%,-50%)';
+  }
   window.addEventListener('pointermove', function(e){
     mouse.x = e.clientX; mouse.y = e.clientY;
-    glow.style.left = e.clientX + 'px';
-    glow.style.top = e.clientY + 'px';
+    if(bgLite) return;
+    pendingGlow = {x:e.clientX, y:e.clientY};
+    if(!glowQueued){ glowQueued = true; requestAnimationFrame(flushGlow); }
     if(!glowVisible){ glow.style.opacity = '1'; glowVisible = true; }
   }, {passive:true});
   window.addEventListener('pointerleave', function(){
