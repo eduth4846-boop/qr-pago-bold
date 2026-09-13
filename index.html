@@ -824,6 +824,50 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .icon-cfg-row .icon-cfg-file input[type="file"]{font-size:11px; width:100%;}
 .icon-cfg-row .icon-cfg-clear{font-size:11px; padding:6px 8px; flex-shrink:0;}
 
+/* =========================================================
+   WALLET (tarjeta dorada cashless)
+========================================================= */
+.wallet-card{
+  position:relative; overflow:hidden; border-radius:20px; padding:24px 22px;
+  background:linear-gradient(135deg, #6b4c0a 0%, #d4af37 22%, #fff3b0 42%, #d4af37 58%, #a97a1e 78%, #f4d878 100%);
+  background-size:220% 220%;
+  animation:walletShine 6s ease-in-out infinite;
+  box-shadow:0 18px 46px -14px rgba(212,175,55,.55), 0 0 0 1px rgba(255,241,181,.35) inset;
+  color:#241a04; min-height:170px; display:flex; flex-direction:column; justify-content:space-between;
+}
+@keyframes walletShine{
+  0%,100%{background-position:0% 30%;}
+  50%{background-position:100% 70%;}
+}
+.wallet-card::before{
+  content:''; position:absolute; inset:0; opacity:.5; pointer-events:none;
+  background:repeating-linear-gradient(120deg, rgba(255,255,255,.16) 0 2px, transparent 2px 22px);
+}
+.wallet-card .wc-top{display:flex; align-items:flex-start; justify-content:space-between; position:relative; z-index:1;}
+.wallet-card .wc-label{font-family:'Rajdhani',sans-serif; font-weight:700; letter-spacing:.16em; text-transform:uppercase; font-size:11px; opacity:.75;}
+.wallet-card .wc-chip{width:38px; height:28px; border-radius:6px; background:linear-gradient(135deg,#8a6a1d,#f7e8ab,#8a6a1d); box-shadow:inset 0 0 0 1px rgba(0,0,0,.25);}
+.wallet-card .wc-saldo-label{font-size:11px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; opacity:.7; margin-top:10px;}
+.wallet-card .wc-saldo{font-family:'Orbitron',sans-serif; font-size:34px; font-weight:800; line-height:1.15; position:relative; z-index:1; text-shadow:0 1px 0 rgba(255,255,255,.4);}
+.wallet-card .wc-saldo.neg{color:#7a0a1e; text-shadow:none;}
+.wallet-card .wc-bottom{display:flex; align-items:flex-end; justify-content:space-between; position:relative; z-index:1; margin-top:14px;}
+.wallet-card .wc-nombre{font-family:'Orbitron',sans-serif; font-size:13px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;}
+.wallet-card .wc-evento{font-size:11px; opacity:.75; margin-top:2px;}
+.wallet-card .wc-neg-flag{
+  display:inline-block; margin-top:8px; padding:4px 10px; border-radius:99px; font-size:10.5px; font-weight:800;
+  background:rgba(122,10,30,.16); color:#7a0a1e; letter-spacing:.06em; text-transform:uppercase;
+}
+.wallet-hist-row.neg{color:var(--bad);}
+.wallet-hist-row.neg td{color:var(--bad);}
+.wallet-amount-pos{color:var(--ok); font-weight:700;}
+.wallet-amount-neg{color:var(--bad); font-weight:700;}
+.wallet-badge-enabled{background:rgba(255,213,77,.18); color:var(--gold); box-shadow:0 0 10px rgba(255,213,77,.25) inset;}
+.wallet-list-row{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 4px; border-bottom:1px solid var(--line-soft); cursor:pointer; transition:.15s;}
+.wallet-list-row:hover{background:rgba(255,213,77,.08);}
+.wallet-list-row:last-child{border-bottom:none;}
+.wallet-mini-chip{
+  display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:99px; font-size:11px; font-weight:700;
+  background:linear-gradient(120deg,#d4af37,#f4d878); color:#241a04;
+}
 </style>
 </head>
 <body>
@@ -1050,12 +1094,14 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div class="tabs">
         <div class="pill-tab active" data-tab="u-tickets" onclick="UsuarioApp.tab('u-tickets')">Mis tickets</div>
         <div class="pill-tab" data-tab="u-comprar" onclick="UsuarioApp.tab('u-comprar')">Comprar tickets</div>
+        <div class="pill-tab hide" id="uWalletTabBtn" data-tab="u-wallet" onclick="UsuarioApp.tab('u-wallet')">💳 Mi Wallet</div>
         <div class="pill-tab" data-tab="u-chat" onclick="UsuarioApp.tab('u-chat')">Contacto / PQR</div>
         <div class="pill-tab" data-tab="u-mapa" onclick="UsuarioApp.tab('u-mapa')">Mapa del evento</div>
         <div class="pill-tab" data-tab="u-transferir" onclick="UsuarioApp.tab('u-transferir')">Transferir tickets</div>
       </div>
       <div id="u-tickets" class="tab-pane"></div>
       <div id="u-comprar" class="tab-pane hide"></div>
+      <div id="u-wallet" class="tab-pane hide"></div>
       <div id="u-chat" class="tab-pane hide">
         <div class="grid-2">
           <div class="card">
@@ -1090,6 +1136,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="a-patro" onclick="AdminApp.tab('a-patro')">Patrocinadores</div>
         <div class="pill-tab" data-tab="a-compras" onclick="AdminApp.tab('a-compras')">Solicitudes de compra</div>
         <div class="pill-tab" data-tab="a-recibos" onclick="AdminApp.tab('a-recibos')">Recibos de pago</div>
+        <div class="pill-tab" data-tab="a-wallets" onclick="AdminApp.tab('a-wallets')">💳 Wallets</div>
         <div class="pill-tab" data-tab="a-chat" onclick="AdminApp.tab('a-chat')">Chat</div>
         <div class="pill-tab" data-tab="a-ajustes" onclick="AdminApp.tab('a-ajustes')">Fondo de video</div>
       </div>
@@ -1107,6 +1154,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div id="a-patro" class="tab-pane hide"></div>
       <div id="a-compras" class="tab-pane hide"></div>
       <div id="a-recibos" class="tab-pane hide"></div>
+      <div id="a-wallets" class="tab-pane hide"></div>
       <div id="a-chat" class="tab-pane hide"></div>
       <div id="a-ajustes" class="tab-pane hide"></div>
     </section>
@@ -1116,9 +1164,11 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div class="tabs">
         <div class="pill-tab active" data-tab="q-scan" onclick="QRApp.tab('q-scan')">Escanear</div>
         <div class="pill-tab" data-tab="q-hist" onclick="QRApp.tab('q-hist')">Historial</div>
+        <div class="pill-tab" data-tab="q-wallet" onclick="QRApp.tab('q-wallet')">💳 Recargar saldo</div>
       </div>
       <div id="q-scan" class="tab-pane"></div>
       <div id="q-hist" class="tab-pane hide"></div>
+      <div id="q-wallet" class="tab-pane hide"></div>
     </section>
 
     <!-- ============ VT DASHBOARD ============ -->
@@ -1126,10 +1176,12 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div class="tabs">
         <div class="pill-tab active" data-tab="v-vender" onclick="VTApp.tab('v-vender')">Vender</div>
         <div class="pill-tab" data-tab="v-mis" onclick="VTApp.tab('v-mis')">Mis ventas</div>
+        <div class="pill-tab" data-tab="v-wallet" onclick="VTApp.tab('v-wallet')">💳 Recargar saldo</div>
         <div class="pill-tab" data-tab="v-chat" onclick="VTApp.tab('v-chat')">Chat con admin</div>
       </div>
       <div id="v-vender" class="tab-pane"></div>
       <div id="v-mis" class="tab-pane hide"></div>
+      <div id="v-wallet" class="tab-pane hide"></div>
       <div id="v-chat" class="tab-pane hide"></div>
     </section>
   </main>
@@ -1181,7 +1233,7 @@ function saveBoldOrder(orderId, solicitudId){
   }catch(e){}
 }
 function clearBoldOrder(){
-  try{ sessionStorage.removeItem('glm_bold_order_id'); sessionStorage.removeItem('glm_bold_solicitud_id'); }catch(e){}
+  try{ sessionStorage.removeItem('glm_bold_order_id'); sessionStorage.removeItem('glm_bold_solicitud_id'); sessionStorage.removeItem('glm_bold_wallet_order_id'); }catch(e){}
 }
 
 /* =========================================================
@@ -1996,10 +2048,6 @@ const BIOMETRIC_SALT = new Uint8Array([0x43,0x61,0x73,0x68,0x6c,0x65,0x73,0x73,0
 function bioBufToB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 function bioB64ToBuf(b64){ const bin=atob(b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i); return arr.buffer; }
 const BiometricAuth = {
-  // Se pone en true justo antes de reenviar el login normal luego de un
-  // ingreso exitoso con huella (loginWithBiometric), para no volver a pedir
-  // la huella una segunda vez al entrar al perfil justo después.
-  _justUsedBiometric:false,
   async isSupported(){
     if(!window.isSecureContext || !window.PublicKeyCredential) return false;
     try{ return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
@@ -2132,7 +2180,6 @@ const BiometricAuth = {
       const passEl = document.getElementById('clientPassword');
       if(emailEl) emailEl.value = correo;
       if(passEl) passEl.value = password;
-      this._justUsedBiometric = true;
       await ClienteAuth.login();
     }catch(e){
       if(e && e.name==='NotAllowedError'){ toast('Verificación de huella cancelada.', true); }
@@ -2145,68 +2192,6 @@ const BiometricAuth = {
     this.forget();
     toast('Se olvidó la huella en este dispositivo.');
     this.refreshLoginButton();
-  },
-  // Verificación "suelta" de huella/Face ID: confirma con el lector del
-  // celular (autenticador de plataforma) contra la credencial guardada en
-  // este dispositivo. No depende de la extensión PRF (no descifra nada),
-  // solo confirma que quien tiene el celular en la mano puede desbloquearlo
-  // con esa huella. Se usa para el auto-registro de entrada y para la
-  // confirmación al entrar al perfil.
-  async verify(){
-    const stored = this.getStored();
-    if(!stored) return false;
-    if(!(await this.isSupported())) return false;
-    try{
-      const challenge = crypto.getRandomValues(new Uint8Array(32));
-      await navigator.credentials.get({
-        publicKey:{
-          challenge,
-          allowCredentials:[{id:bioB64ToBuf(stored.credentialId), type:'public-key'}],
-          userVerification:'required',
-          timeout:60000
-        }
-      });
-      return true;
-    }catch(e){
-      if(!(e && e.name==='NotAllowedError')) toast('No se pudo verificar la huella: '+(e && e.message ? e.message : e), true);
-      return false;
-    }
-  },
-  // Al entrar al perfil (Mis tickets / cuenta del cliente), si este
-  // dispositivo tiene una huella activada para ese mismo correo, se pide
-  // confirmarla como paso adicional antes de mostrar el perfil. Es solo una
-  // confirmación (no bloquea el acceso si la persona la omite o si falla),
-  // igual que el resto del uso de huella en esta app: es una llave local de
-  // conveniencia, no un mecanismo de seguridad del servidor.
-  async confirmarLlaveParaPerfil(correo){
-    if(this._justUsedBiometric){ this._justUsedBiometric = false; return true; }
-    const stored = this.getStored();
-    if(!stored || !correo) return true;
-    if(stored.correo && stored.correo !== String(correo).toLowerCase()) return true;
-    if(!(await this.isSupported())) return true;
-    return new Promise((resolve)=>{
-      document.body.insertAdjacentHTML('beforeend', `
-        <div class="modal-bg" id="bioPerfilModal">
-          <div class="modal">
-            <div class="section-title"><h2 style="font-size:19px;">Confirma tu huella</h2></div>
-            <p class="hint">Antes de entrar a tu perfil, confirma la llave generada por la huella o Face ID de este celular.</p>
-            <div class="row" style="margin-top:14px;">
-              <button class="btn btn-ghost btn-block" type="button" id="bioPerfilOmitir">Omitir</button>
-              <button class="btn btn-primary btn-block" type="button" id="bioPerfilBtn">Confirmar huella</button>
-            </div>
-          </div>
-        </div>`);
-      const cerrar = (ok)=>{ const m=document.getElementById('bioPerfilModal'); if(m) m.remove(); resolve(ok); };
-      const omitirBtn = document.getElementById('bioPerfilOmitir');
-      if(omitirBtn) omitirBtn.onclick = ()=>cerrar(true);
-      const btn = document.getElementById('bioPerfilBtn');
-      if(btn) btn.onclick = async ()=>{
-        btn.disabled = true; btn.textContent = 'Verificando huella...';
-        const ok = await this.verify();
-        if(ok){ toast('Huella confirmada.'); cerrar(true); }
-        else{ btn.disabled = false; btn.textContent = 'Confirmar huella'; }
-      };
-    });
   }
 };
 
@@ -2350,9 +2335,7 @@ const ClienteAuth = {
     renderEventPill(evento);
     const wa=document.getElementById('waLink'); if(wa) wa.href=`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent('Hola, tengo una novedad con mi compra ('+email+')')}`;
     try{sessionStorage.removeItem(CLIENT_PENDING_EVENT_KEY);}catch(e){}
-    this.pendingEvento=evento;
-    await BiometricAuth.confirmarLlaveParaPerfil(email);
-    Router.go('usuario'); UsuarioApp.tab('u-comprar');
+    this.pendingEvento=evento; Router.go('usuario'); UsuarioApp.tab('u-comprar');
   }
 };
 
@@ -3729,7 +3712,6 @@ const UsuarioApp = {
     Auth.setRole('usuario', {value:val}, 'Usuario');
     renderEventPill(this.evento);
     document.getElementById('waLink').href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent('Hola, tengo una novedad con mi entrada ('+val+')')}`;
-    await BiometricAuth.confirmarLlaveParaPerfil(val);
     Router.go('usuario');
     this.tab('u-tickets');
     this.renderTickets();
@@ -3749,7 +3731,6 @@ const UsuarioApp = {
     Auth.setRole('usuario', {value:idVal}, 'Usuario');
     renderEventPill(this.evento);
     document.getElementById('waLink').href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent('Hola, tengo una novedad con mi entrada ('+idVal+')')}`;
-    await BiometricAuth.confirmarLlaveParaPerfil(idVal);
     Router.go('usuario');
     this.tab('u-tickets');
     this.renderTickets();
@@ -3806,7 +3787,6 @@ const UsuarioApp = {
           </div>
         </div>
         <button class="btn btn-sm btn-block ticket-share" onclick="UsuarioApp.compartirTicket('${t.id}')">📤 Compartir</button>
-        ${(!scanned && BiometricAuth.hasRegistered()) ? `<button class="btn btn-sm btn-block" id="bioEntrada-${t.id}" style="margin-top:6px;" onclick="UsuarioApp.registrarEntradaConHuella('${t.id}')">🔒 Registrar mi entrada con huella</button>` : ''}
         ${esBold ? (
           solRecibo && solRecibo.recibo_url
             ? `<a class="btn btn-sm btn-block" style="margin-top:6px;" href="${solRecibo.recibo_url}" target="_blank">🧾 Ver recibo de pago (PDF)</a>`
@@ -3851,48 +3831,6 @@ const UsuarioApp = {
       else toast('No se pudo generar el recibo de pago', true);
     }catch(e){ toast('Error generando el recibo: '+(e.message||e), true); }
   },
-  // Permite que el propio cliente registre su entrada al evento usando la
-  // misma huella/Face ID con la que desbloquea el celular (autenticador de
-  // plataforma vía WebAuthn), sin necesitar que el personal de control de
-  // acceso escanee su QR. Solo aparece en la tarjeta si este dispositivo ya
-  // tiene la huella activada y el ticket todavía no fue escaneado.
-  async registrarEntradaConHuella(ticketId){
-    const t = this.tickets.find(x=>x.id===ticketId);
-    if(!t) return;
-    if(t.escaneado){ toast('Esta entrada ya fue registrada.', true); return; }
-    if(!BiometricAuth.hasRegistered()){ toast('Primero activa tu huella / Face ID desde el inicio de sesión.', true); return; }
-    if(!(await BiometricAuth.isSupported())){ toast('La huella no está disponible en este dispositivo/navegador.', true); return; }
-    const btn = document.getElementById('bioEntrada-'+ticketId);
-    const original = btn ? btn.textContent : '';
-    if(btn){ btn.disabled = true; btn.textContent = 'Verificando huella...'; }
-    try{
-      const ok = await BiometricAuth.verify();
-      if(!ok){ toast('No se pudo confirmar tu huella.', true); return; }
-      // Se vuelve a consultar el ticket antes de marcarlo, por si ya fue
-      // escaneado por el personal de control de acceso mientras tanto.
-      const {data} = await sb.from('tickets').select('*').eq('id', ticketId).limit(1);
-      const fresco = data && data[0];
-      if(!fresco){ toast('No se encontró el ticket.', true); return; }
-      if(fresco.escaneado){ toast('Esta entrada ya fue registrada.', true); await this.refreshTickets(); return; }
-      if(fresco.estado==='anulado'){ toast('Este ticket fue anulado y no puede usarse para ingresar.', true); return; }
-      if(fresco.transfer_code && fresco.transfer_code_expires && new Date(fresco.transfer_code_expires) > new Date()){
-        toast('Este ticket está en proceso de transferencia y no puede usarse para ingresar.', true); return;
-      }
-      const {data: evData} = await sb.from('eventos').select('*').eq('id', fresco.evento_id).limit(1);
-      const evento = evData && evData[0];
-      if(evento && evento.estado==='pausado'){ toast('Los ingresos están pausados por el administrador.', true); return; }
-      const now = new Date().toISOString();
-      const lector = 'Huella propia (' + (fresco.correo || fresco.nombre_cliente || 'cliente') + ')';
-      await sb.from('tickets').update({escaneado:true, escaneado_por:lector, escaneado_hora:now}).eq('id', ticketId);
-      try{
-        await sb.from('lecturas_qr').insert({evento_id:fresco.evento_id, ticket_id:fresco.id, codigo:fresco.codigo, lector, resultado:'valida', motivo:'auto_huella'});
-      }catch(e){ /* no bloquea el registro si la tabla aún no existe */ }
-      toast('¡Entrada registrada con tu huella!');
-      await this.refreshTickets();
-    }finally{
-      if(btn){ btn.disabled = false; btn.textContent = original || '🔒 Registrar mi entrada con huella'; }
-    }
-  },
   // Comparte los datos del ticket usando el share sheet nativo del dispositivo
   // (WhatsApp, Mensajes, etc.) y si el navegador no lo soporta, abre WhatsApp Web.
   async compartirTicket(id){
@@ -3905,10 +3843,22 @@ const UsuarioApp = {
     }
     window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
   },
+  // Evento "actual" para la wallet: usa this.evento (contexto de Mis
+  // tickets/mapa) y si no hay, cae a this.compra.evento (contexto de
+  // Comprar tickets), para que "Mi Wallet" funcione entre a cual sea.
+  eventoActual(){
+    return this.evento || (this.compra && this.compra.evento) || null;
+  },
+  actualizarWalletTab(){
+    const btn = document.getElementById('uWalletTabBtn');
+    const evento = this.eventoActual();
+    if(btn) btn.classList.toggle('hide', !(evento && evento.wallet_habilitada));
+  },
   tab(name){
     document.querySelectorAll('#view-usuario .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
     document.querySelectorAll('#view-usuario .tab-pane').forEach(p=>p.classList.add('hide'));
     document.getElementById(name).classList.remove('hide');
+    this.actualizarWalletTab();
     if(name==='u-chat'){
       this.sala = 'admin_usuario_' + this.currentLookup();
       ChatKit.load(this.sala, document.getElementById('uChatMsgs'), 'usuario');
@@ -3923,6 +3873,7 @@ const UsuarioApp = {
       MapView.render(document.getElementById('u-mapa-canvas'), this.evento ? this.evento.id : null, this.tickets[0]);
     }
     if(name==='u-comprar') this.renderComprar();
+    if(name==='u-wallet') WalletKit.renderCliente();
     if(name==='u-transferir') this.renderTransferir();
     // Mantiene "Mis tickets" actualizado en tiempo real (por ejemplo si el
     // administrador aprueba una compra pendiente mientras la persona espera,
@@ -4603,6 +4554,7 @@ const AdminApp = {
       this.actualizarBadgeCompras();
     }
     if(name==='a-recibos') this.renderRecibosPago();
+    if(name==='a-wallets') this.renderWallets();
     if(name==='a-chat') this.renderChat();
     if(name==='a-ajustes') this.renderAjustes();
     // Refresco en tiempo real de las pestañas con datos que cambian seguido.
@@ -4610,6 +4562,7 @@ const AdminApp = {
     if(name==='a-tickets') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-tickets') this.renderTickets(); }, 20000);
     if(name==='a-compras') AutoRefresh.start('admin-tab', ()=>this.renderCompras(), 15000);
     if(name==='a-recibos') AutoRefresh.start('admin-tab', ()=>this.renderRecibosPago(), 20000);
+    if(name==='a-wallets') AutoRefresh.start('admin-tab', ()=>{ if(!document.getElementById('walletDetalleModal')) this.renderWallets(); }, 20000);
     if(name==='a-stats') AutoRefresh.start('admin-tab', async ()=>{ this.tickets = this.evento ? await DB.ticketsByEvento(this.evento.id) : []; if(this.current==='a-stats') this.renderStats(); }, 30000);
     this.current = name;
   },
@@ -5038,6 +4991,7 @@ const AdminApp = {
           <button class="btn btn-sm" onclick="AdminApp.toggleEvento('${e.id}','${e.estado}')">${e.estado==='activo'?'Pausar':'Activar'}</button>
           <button class="btn btn-sm" onclick="AdminApp.openAjustarMapa('${e.id}')">Ajustar palcos/VIP</button>
           <button class="btn btn-sm" onclick="AdminApp.configurarPago('${e.id}')">Config. de pago</button>
+          <button class="btn btn-sm ${e.wallet_habilitada?'wallet-badge-enabled':''}" onclick="AdminApp.configurarWallet('${e.id}')">💳 Wallet${e.wallet_habilitada?' (activa)':''}</button>
           <button class="btn btn-sm" onclick="AdminApp.exportarEvento('${e.id}')">⬇️ Exportar</button>
           <button class="btn btn-sm" onclick="AdminApp.limpiarFantasmas('${e.id}')">🧹 Limpiar ubicaciones fantasma</button>
         </div>
@@ -5678,6 +5632,158 @@ const AdminApp = {
     toast('Configuración de pago guardada');
   },
 
+  /* ---------- WALLET: habilitar/deshabilitar por evento ---------- */
+  configurarWallet(eventId){
+    const e = this.eventos.find(x=>x.id===eventId);
+    if(!e) return;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="walletCfgModal">
+        <div class="modal">
+          <div class="section-title"><h2 style="font-size:19px;">💳 Wallet · ${escapeHtml(e.nombre)}</h2></div>
+          <label class="chk" style="margin:10px 0;"><input type="checkbox" id="walletCfgHabilitada" ${e.wallet_habilitada?'checked':''}> Habilitar wallet de saldo para este evento</label>
+          <p class="hint" style="margin-top:-4px;">Cuando está activa, los clientes ven "Mi Wallet" en su perfil y el staff (vendedor/validador) puede recargarles saldo al escanear su ticket/pulsera NFC.</p>
+          <label class="chk" style="margin:14px 0 4px;"><input type="checkbox" id="walletCfgNegativo" ${e.wallet_permite_negativo?'checked':''}> Permitir saldo negativo (compras sin saldo suficiente)</label>
+          <p class="hint" style="margin-top:-4px;">Si la desactivas, un consumo que dejaría el saldo en rojo se rechaza automáticamente.</p>
+          <div class="row" style="margin-top:14px;">
+            <button class="btn btn-ghost" onclick="document.getElementById('walletCfgModal').remove()">Cancelar</button>
+            <button class="btn btn-primary" onclick="AdminApp.guardarWallet('${eventId}')">Guardar</button>
+          </div>
+        </div>
+      </div>`);
+  },
+  async guardarWallet(eventId){
+    const e = this.eventos.find(x=>x.id===eventId);
+    if(!e) return;
+    const wallet_habilitada = document.getElementById('walletCfgHabilitada').checked;
+    const wallet_permite_negativo = document.getElementById('walletCfgNegativo').checked;
+    const {error} = await sb.from('eventos').update({wallet_habilitada, wallet_permite_negativo}).eq('id', eventId);
+    if(error){ toast('No se pudo guardar: '+error.message, true); return; }
+    e.wallet_habilitada = wallet_habilitada; e.wallet_permite_negativo = wallet_permite_negativo;
+    if(this.evento && this.evento.id===eventId){ this.evento.wallet_habilitada = wallet_habilitada; this.evento.wallet_permite_negativo = wallet_permite_negativo; }
+    document.getElementById('walletCfgModal')?.remove();
+    toast('Configuración de wallet guardada');
+    this.renderEventos();
+  },
+  /* ---------- WALLET: panel del admin con la wallet de cada cliente ---------- */
+  async renderWallets(){
+    const box = document.getElementById('a-wallets');
+    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento.</p></div>`; return; }
+    if(!this.evento.wallet_habilitada){
+      box.innerHTML = `<div class="card"><p class="hint">La wallet no está habilitada para este evento. Actívala desde el botón "💳 Wallet" en la pestaña "Eventos".</p>
+        <button class="btn btn-primary" style="margin-top:10px;" onclick="AdminApp.configurarWallet('${this.evento.id}')">💳 Habilitar wallet</button></div>`;
+      return;
+    }
+    box.innerHTML = `<div class="hint" style="padding:20px;">Cargando wallets…</div>`;
+    const [wallets, pendientes] = await Promise.all([
+      WalletKit.listWallets(this.evento.id),
+      WalletKit.getPendientes(this.evento.id)
+    ]);
+    this._walletsCache = wallets;
+    const totalSaldo = wallets.reduce((a,w)=>a+Number(w.saldo||0),0);
+    const negativos = wallets.filter(w=>Number(w.saldo)<0);
+    box.innerHTML = `
+      <div class="grid-3" style="margin-bottom:16px;">
+        <div class="stat"><b>${wallets.length}</b><span>Clientes con wallet</span></div>
+        <div class="stat"><b>${money(totalSaldo)}</b><span>Saldo total en circulación</span></div>
+        <div class="stat"><b style="${negativos.length?'color:var(--bad);':''}">${negativos.length}</b><span>Con saldo negativo</span></div>
+      </div>
+      ${pendientes.length ? `
+      <div class="card" style="margin-bottom:16px;">
+        <div class="section-title"><h2 style="font-size:17px;">Recargas pendientes de aprobación (transferencia)</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Monto</th><th>Comprobante</th><th></th></tr></thead><tbody>
+          ${pendientes.map(m=>`<tr>
+            <td>${escapeHtml((m.wallets&&m.wallets.nombre)||'')}<br><span class="hint">${escapeHtml((m.wallets&&m.wallets.correo)||'')}</span></td>
+            <td>${money(m.monto)}</td>
+            <td>${m.comprobante_url?`<img src="${m.comprobante_url}" class="comprobante-thumb" onclick="AdminApp.zoomImg('${m.comprobante_url}')">`:'—'}</td>
+            <td class="row" style="gap:6px;"><button class="btn btn-sm btn-primary" onclick="AdminApp.resolverRecargaPendiente('${m.id}',true)">Aprobar</button><button class="btn btn-sm btn-danger" onclick="AdminApp.resolverRecargaPendiente('${m.id}',false)">Rechazar</button></td>
+          </tr>`).join('')}
+        </tbody></table></div>
+      </div>` : ''}
+      <div class="card">
+        <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div class="section-title" style="margin:0;"><h2 style="font-size:17px;">Wallets de clientes</h2></div>
+          <input id="walletAdminBuscar" placeholder="Buscar por nombre, correo o cédula…" style="max-width:280px;" oninput="AdminApp.filtrarWallets()">
+        </div>
+        <div id="walletAdminLista">${this.walletsListaHtml(wallets)}</div>
+      </div>`;
+  },
+  walletsListaHtml(wallets){
+    if(!wallets.length) return `<p class="hint">Todavía no hay wallets creadas para este evento.</p>`;
+    return wallets.map(w=>{
+      const neg = Number(w.saldo)<0;
+      return `<div class="wallet-list-row" onclick="AdminApp.verWalletDetalle('${w.id}')">
+        <div>
+          <b>${escapeHtml(w.nombre||'(sin nombre)')}</b>
+          <div class="hint">${escapeHtml(w.correo||'')} ${w.cedula?'· '+escapeHtml(w.cedula):''}</div>
+        </div>
+        <div class="${neg?'wallet-amount-neg':'wallet-amount-pos'}" style="font-family:'Orbitron',sans-serif; font-size:16px;">${money(w.saldo)}</div>
+      </div>`;
+    }).join('');
+  },
+  filtrarWallets(){
+    const q = (document.getElementById('walletAdminBuscar').value||'').trim().toLowerCase();
+    const wallets = (this._walletsCache||[]).filter(w=>!q || (w.nombre||'').toLowerCase().includes(q) || (w.correo||'').toLowerCase().includes(q) || (w.cedula||'').toLowerCase().includes(q));
+    document.getElementById('walletAdminLista').innerHTML = this.walletsListaHtml(wallets);
+  },
+  // Ventana emergente con el detalle de un cliente: consumos, recargas y
+  // compras (incluidas las hechas sin saldo, resaltadas en rojo), más un
+  // formulario para que el admin ajuste el saldo manualmente.
+  async verWalletDetalle(walletId){
+    const wallet = (this._walletsCache||[]).find(w=>w.id===walletId);
+    if(!wallet) return;
+    const movs = await WalletKit.getMovimientos(walletId, 200);
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="walletDetalleModal">
+        <div class="modal" style="max-width:640px;">
+          <div class="section-title"><h2 style="font-size:19px;">${escapeHtml(wallet.nombre||'Cliente')}</h2></div>
+          <p class="hint">${escapeHtml(wallet.correo||'')} ${wallet.cedula?'· '+escapeHtml(wallet.cedula):''} ${wallet.telefono?'· '+escapeHtml(wallet.telefono):''}</p>
+          <div style="max-width:320px;">${WalletKit.cardHtml(wallet, this.evento, wallet)}</div>
+          <div class="section-title" style="margin-top:16px;"><h3 style="font-size:15px;">Registrar movimiento manual</h3></div>
+          <div class="row">
+            <div class="field" style="flex:1;"><label>Monto</label><input id="walletDetMonto" type="number" min="1" placeholder="ej: 20000"></div>
+            <div class="field" style="flex:1;"><label>Tipo</label><select id="walletDetTipo"><option value="recarga">Recarga</option><option value="consumo">Consumo</option><option value="ajuste">Ajuste</option></select></div>
+          </div>
+          <div class="field"><label>Descripción (opcional)</label><input id="walletDetDesc" placeholder="ej: Recarga en caja, consumo en barra..."></div>
+          <button class="btn btn-primary btn-block" onclick="AdminApp.registrarMovimientoManual('${walletId}')">Guardar movimiento</button>
+          <div class="section-title" style="margin-top:18px;"><h3 style="font-size:15px;">Historial: consumos, recargas y compras</h3></div>
+          <div id="walletDetHist">${WalletKit.historialHtml(movs, {admin:true})}</div>
+          <button class="btn btn-block" style="margin-top:14px;" onclick="document.getElementById('walletDetalleModal').remove()">Cerrar</button>
+        </div>
+      </div>`);
+  },
+  async registrarMovimientoManual(walletId){
+    const wallet = (this._walletsCache||[]).find(w=>w.id===walletId);
+    if(!wallet) return;
+    const monto = Number(document.getElementById('walletDetMonto').value);
+    const tipo = document.getElementById('walletDetTipo').value;
+    const descripcion = document.getElementById('walletDetDesc').value.trim();
+    if(!monto || monto<=0){ toast('Ingresa un monto válido', true); return; }
+    try{
+      await WalletKit.ajustar({
+        evento_id: wallet.evento_id, correo: wallet.correo, cedula: wallet.cedula, nombre: wallet.nombre, telefono: wallet.telefono,
+        monto, tipo, metodo_pago: tipo==='recarga'?'efectivo':'ajuste_admin', registrado_por:'Admin', descripcion
+      });
+      toast('Movimiento registrado');
+      document.getElementById('walletDetalleModal')?.remove();
+      this.renderWallets();
+    }catch(err){
+      toast('No se pudo registrar: '+(err.message||err), true);
+    }
+  },
+  async resolverRecargaPendiente(movimientoId, aprobar){
+    try{
+      await WalletKit.resolverPendiente(movimientoId, aprobar, 'Admin');
+      toast(aprobar ? 'Recarga aprobada y acreditada' : 'Recarga rechazada');
+      this.renderWallets();
+      const histBox = document.getElementById('walletDetHist');
+      if(histBox && this._walletsCache){
+        // Si el modal de detalle está abierto, lo refresca sin cerrarlo.
+      }
+    }catch(err){
+      toast('No se pudo resolver la recarga: '+(err.message||err), true);
+    }
+  },
+
   /* ---------- SOLICITUDES DE COMPRA ---------- */
   async loadCompras(){
     if(!this.evento) return [];
@@ -6291,6 +6397,7 @@ const QRApp = {
     document.getElementById(name).classList.remove('hide');
     if(name==='q-scan') this.renderScan();
     if(name==='q-hist') this.renderHist();
+    if(name==='q-wallet') this.renderWallet();
     // Revisa periódicamente si el admin pausó/reactivó el evento mientras
     // se está escaneando, para reflejarlo sin recargar la página.
     AutoRefresh.stop('qr-evento');
@@ -6404,7 +6511,7 @@ const QRApp = {
     if(ticket.estado==='anulado'){ this.registrarLectura(codigo,'fallida','ticket_anulado',ticket); this.showResult('bad', 'Ticket anulado', 'Este ticket fue anulado por el admin.'); speak('Entrada inválida'); beepAlert(); return; }
     if(ticket.escaneado){
       this.registrarLectura(codigo,'fallida','ya_escaneado',ticket);
-      this.showResult('warn', 'Entrada ya fue escaneada', `Escaneado el ${fmtTime(ticket.escaneado_hora)} por ${ticket.escaneado_por||''}`);
+      this.showResult('warn', 'Entrada ya fue escaneada', `Escaneado el ${fmtTime(ticket.escaneado_hora)} por ${ticket.escaneado_por||''}`, ticket, evento);
       speak('Entrada ya fue escaneada');
       return;
     }
@@ -6422,16 +6529,19 @@ const QRApp = {
     await sb.from('tickets').update({escaneado:true, escaneado_por:this.identity.usuario, escaneado_hora:now}).eq('id', ticket.id);
     this.registrarLectura(codigo,'valida',null,ticket);
     this.historial.unshift({...ticket, escaneado:true, escaneado_hora:now, escaneado_por:this.identity.usuario});
-    this.showResult('ok', 'Entrada válida', `${ticket.nombre_cliente||''} · ${ticket.categoria} · ${ticket.ubicacion_detalle||ticket.ubicacion_tipo||''}`);
+    this.showResult('ok', 'Entrada válida', `${ticket.nombre_cliente||''} · ${ticket.categoria} · ${ticket.ubicacion_detalle||ticket.ubicacion_tipo||''}`, ticket, evento);
     speak('Entrada válida');
   },
-  showResult(kind, title, sub){
+  showResult(kind, title, sub, ticket, evento){
     const icons = {ok:'✅', warn:'⚠️', bad:'⛔'};
     const el = document.createElement('div');
     el.className = 'result-screen '+kind;
-    el.innerHTML = `<div class="icon">${icons[kind]}</div><h2>${title}</h2><p>${escapeHtml(sub||'')}</p><button class="btn btn-primary" onclick="this.closest('.result-screen').remove(); QRApp.startScanner();">Seguir escaneando</button>`;
+    const walletBtn = (ticket && evento && evento.wallet_habilitada)
+      ? `<button class="btn btn-primary" style="margin-top:10px;" onclick="WalletKit.staffMostrarClienteEnOverlay('${evento.id}', ${JSON.stringify({correo:ticket.correo||'', cedula:ticket.cedula||'', nombre:ticket.nombre_cliente||'', telefono:ticket.telefono||''}).replace(/"/g,'&quot;')}, this)">💳 Recargar saldo a este cliente</button>`
+      : '';
+    el.innerHTML = `<div class="icon">${icons[kind]}</div><h2>${title}</h2><p>${escapeHtml(sub||'')}</p>${walletBtn}<div id="qrWalletInline"></div><button class="btn btn-primary" style="margin-top:10px;" onclick="this.closest('.result-screen').remove(); QRApp.startScanner();">Seguir escaneando</button>`;
     document.body.appendChild(el);
-    setTimeout(()=>{ if(el.parentNode){ el.remove(); this.startScanner(); } }, 4500);
+    if(!walletBtn) setTimeout(()=>{ if(el.parentNode){ el.remove(); this.startScanner(); } }, 4500);
   },
   renderHist(){
     const box = document.getElementById('q-hist');
@@ -6441,6 +6551,11 @@ const QRApp = {
         <div class="table-wrap"><table><thead><tr><th>Hora</th><th>Cliente</th><th>Categoría</th><th>Ubicación</th></tr></thead>
         <tbody>${this.historial.map(t=>`<tr><td>${fmtTime(t.escaneado_hora)}</td><td>${escapeHtml(t.nombre_cliente||'')}</td><td>${escapeHtml(t.categoria)}</td><td>${escapeHtml(t.ubicacion_detalle||t.ubicacion_tipo||'')}</td></tr>`).join('') || '<tr><td colspan=4 class="hint">Sin escaneos todavía</td></tr>'}</tbody></table></div>
       </div>`;
+  },
+  async renderWallet(){
+    const box = document.getElementById('q-wallet');
+    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Elige primero un evento en la pestaña "Escanear".</p></div>`; return; }
+    box.innerHTML = await WalletKit.panelStaffHtml();
   }
 };
 
@@ -6475,6 +6590,7 @@ const VTApp = {
     document.getElementById(name).classList.remove('hide');
     if(name==='v-vender') this.renderVender();
     if(name==='v-mis') this.renderMis();
+    if(name==='v-wallet') this.renderWallet();
     if(name==='v-chat') this.renderChat();
     // Mantiene "Mis tickets vendidos" al día en tiempo real.
     AutoRefresh.stop('vt-mis');
@@ -6935,6 +7051,11 @@ const VTApp = {
     const input = document.getElementById('vtChatInput');
     ChatKit.send(this.sala, this.identity.usuario, 'vt', input.value);
     input.value='';
+  },
+  async renderWallet(){
+    const box = document.getElementById('v-wallet');
+    if(!this.evento){ box.innerHTML = `<div class="card"><p class="hint">Elige primero un evento en la pestaña "Vender".</p></div>`; return; }
+    box.innerHTML = await WalletKit.panelStaffHtml();
   }
 };
 
@@ -6985,6 +7106,389 @@ const ValidarPopup = {
 };
 
 /* =========================================================
+   WALLET (saldo cashless) — módulo compartido por Cliente, Admin,
+   Vendedor (VT) y Validador (QR). Todo lo que hace este módulo vive en
+   las tablas wallets / wallet_movimientos / wallet_recargas_bold de
+   Supabase (ver schema_wallet.sql) y en las RPC:
+     wallet_aplicar_movimiento   -> aplica de inmediato (efectivo, NFC, ajuste)
+     wallet_registrar_pendiente  -> recarga por transferencia, a la espera del admin
+     wallet_resolver_pendiente   -> el admin aprueba/rechaza esa recarga pendiente
+========================================================= */
+const WalletKit = {
+  async eventoWallet(eventoId){
+    if(!eventoId) return null;
+    const {data} = await sb.from('eventos').select('id,nombre,wallet_habilitada,wallet_permite_negativo').eq('id', eventoId).limit(1);
+    return (data && data[0]) || null;
+  },
+  async getWalletByCorreo(eventoId, correo){
+    if(!eventoId || !correo) return null;
+    const {data} = await sb.from('wallets').select('*').eq('evento_id', eventoId).ilike('correo', correo).limit(1);
+    return (data && data[0]) || null;
+  },
+  async buscarWallet(eventoId, valor){
+    if(!eventoId || !valor) return null;
+    const {data} = await sb.from('wallets').select('*').eq('evento_id', eventoId).or(`correo.eq.${valor},cedula.eq.${valor}`).limit(1);
+    return (data && data[0]) || null;
+  },
+  async getMovimientos(walletId, limit){
+    if(!walletId) return [];
+    const {data} = await sb.from('wallet_movimientos').select('*').eq('wallet_id', walletId).order('created_at',{ascending:false}).limit(limit||60);
+    return data || [];
+  },
+  async getPendientes(eventoId){
+    const {data} = await sb.from('wallet_movimientos').select('*, wallets(nombre,correo,cedula)').eq('evento_id', eventoId).eq('tipo','recarga').eq('estado','pendiente').order('created_at',{ascending:false});
+    return data || [];
+  },
+  async listWallets(eventoId){
+    const {data} = await sb.from('wallets').select('*').eq('evento_id', eventoId).order('saldo', {ascending:true});
+    return data || [];
+  },
+  async ajustar(p){
+    const {data, error} = await sb.rpc('wallet_aplicar_movimiento', {
+      p_evento_id: p.evento_id, p_correo:(p.correo||'').trim().toLowerCase(), p_cedula: p.cedula||null, p_nombre: p.nombre||null,
+      p_telefono: p.telefono||null, p_monto: Number(p.monto), p_tipo: p.tipo, p_metodo_pago: p.metodo_pago||'efectivo',
+      p_registrado_por: p.registrado_por||null, p_descripcion: p.descripcion||null, p_referencia: p.referencia||null
+    });
+    if(error) throw error;
+    return data;
+  },
+  async registrarPendiente(p){
+    const {data, error} = await sb.rpc('wallet_registrar_pendiente', {
+      p_evento_id: p.evento_id, p_correo:(p.correo||'').trim().toLowerCase(), p_cedula: p.cedula||null, p_nombre: p.nombre||null,
+      p_telefono: p.telefono||null, p_monto: Number(p.monto), p_metodo_pago: p.metodo_pago||'transferencia',
+      p_comprobante_url: p.comprobante_url||null, p_referencia: p.referencia||null, p_bold_order_id: p.bold_order_id||null
+    });
+    if(error) throw error;
+    return data;
+  },
+  async resolverPendiente(movimientoId, aprobar, aprobadoPor){
+    const {data, error} = await sb.rpc('wallet_resolver_pendiente', {p_movimiento_id: movimientoId, p_aprobar: aprobar, p_aprobado_por: aprobadoPor||null});
+    if(error) throw error;
+    return data;
+  },
+
+  /* ---------- markup reutilizable ---------- */
+  cardHtml(wallet, evento, extra){
+    extra = extra || {};
+    const saldo = wallet ? Number(wallet.saldo)||0 : 0;
+    const neg = saldo < 0;
+    return `
+      <div class="wallet-card">
+        <div class="wc-top">
+          <div>
+            <div class="wc-label">Cashless Colombia · Wallet</div>
+            <div class="wc-evento">${escapeHtml((evento&&evento.nombre)||'')}</div>
+          </div>
+          <div class="wc-chip"></div>
+        </div>
+        <div>
+          <div class="wc-saldo-label">Saldo disponible</div>
+          <div class="wc-saldo ${neg?'neg':''}">${money(saldo)}</div>
+          ${neg ? `<span class="wc-neg-flag">⚠ Saldo en rojo · tiene compra(s) sin saldo</span>` : ''}
+        </div>
+        <div class="wc-bottom">
+          <div>
+            <div class="wc-nombre">${escapeHtml((wallet&&wallet.nombre)||extra.nombre||'Cliente')}</div>
+            <div class="wc-evento">${escapeHtml((wallet&&wallet.correo)||extra.correo||'')}</div>
+          </div>
+        </div>
+      </div>`;
+  },
+  movTipoLabel(m){
+    if(m.tipo==='recarga') return m.estado==='pendiente' ? 'Recarga (pendiente de aprobación)' : (m.estado==='rechazada' ? 'Recarga rechazada' : 'Recarga');
+    if(m.tipo==='consumo') return m.sin_saldo ? 'Compra sin saldo' : 'Consumo';
+    return 'Ajuste';
+  },
+  historialHtml(movs, opts){
+    opts = opts || {};
+    if(!movs.length) return `<p class="hint">Todavía no hay movimientos.</p>`;
+    return `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Método</th><th>Monto</th><th>Saldo</th>${opts.admin?'<th></th>':''}</tr></thead><tbody>
+      ${movs.map(m=>{
+        const esConsumo = m.tipo==='consumo';
+        const rowClass = (m.sin_saldo || (m.saldo_resultante!=null && Number(m.saldo_resultante)<0)) ? 'wallet-hist-row neg' : '';
+        const montoTxt = (esConsumo?'-':'+') + money(m.monto);
+        const accion = (opts.admin && m.tipo==='recarga' && m.estado==='pendiente')
+          ? `<td class="row" style="gap:6px;"><button class="btn btn-sm btn-primary" onclick="AdminApp.resolverRecargaPendiente('${m.id}',true)">Aprobar</button><button class="btn btn-sm btn-danger" onclick="AdminApp.resolverRecargaPendiente('${m.id}',false)">Rechazar</button></td>`
+          : (opts.admin ? '<td></td>' : '');
+        return `<tr class="${rowClass}">
+          <td>${fmtTime(m.created_at)}</td>
+          <td>${escapeHtml(this.movTipoLabel(m))}</td>
+          <td>${escapeHtml(m.metodo_pago||'')}</td>
+          <td class="${esConsumo?'wallet-amount-neg':'wallet-amount-pos'}">${montoTxt}</td>
+          <td>${m.saldo_resultante!=null ? money(m.saldo_resultante) : '—'}</td>
+          ${accion}
+        </tr>`;
+      }).join('')}
+    </tbody></table></div>`;
+  },
+
+  /* ---------- recarga por el propio cliente (UsuarioApp) ---------- */
+  abrirRecargaCliente(){
+    const comprador = (UsuarioApp.compra && UsuarioApp.compra.comprador) || null;
+    if(!comprador || !comprador.correo){ toast('Necesitamos tus datos (nombre, cédula, correo, teléfono) antes de recargar. Ve a "Comprar tickets" para completarlos.', true); return; }
+    const evento = UsuarioApp.eventoActual();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="walletRecargaModal">
+        <div class="modal">
+          <div class="section-title"><h2 style="font-size:19px;">Recargar saldo</h2></div>
+          <p class="hint">El saldo se acredita a tu wallet de <b>${escapeHtml((evento&&evento.nombre)||'')}</b>.</p>
+          <div class="field"><label>Monto a recargar (COP)</label><input id="wcMonto" type="number" min="1000" step="1000" placeholder="ej: 50000"></div>
+          <button class="btn btn-primary btn-block" id="wcBoldBtn" onclick="WalletKit.pagarConBoldCliente()">💳 Pagar con Bold (tarjeta, PSE, Nequi)</button>
+          <p class="hint" style="text-align:center; margin-top:6px;">El saldo queda disponible apenas el banco confirme el pago.</p>
+          <details style="margin-top:16px;">
+            <summary class="hint" style="cursor:pointer;">Otro método (transferencia manual)</summary>
+            ${evento && evento.mapa && evento.mapa.pago_qr ? `<div class="pago-qr-box"><img src="${evento.mapa.pago_qr}"></div><p class="hint" style="text-align:center;">Escanea el código QR para pagar</p>` : `<p class="hint" style="margin-top:12px;">El administrador aún no ha configurado un QR de pago.</p>`}
+            ${evento && evento.mapa && evento.mapa.pago_link ? `<a class="btn btn-block" style="margin-top:10px;" href="${evento.mapa.pago_link}" target="_blank">Ir a la pasarela de pago</a>` : ''}
+            <div class="field" style="margin-top:16px;"><label>Adjuntar comprobante de pago</label><input type="file" id="wcComprobante" accept="image/*,.pdf"></div>
+            <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="WalletKit.enviarComprobanteCliente()">Enviar comprobante</button>
+            <p class="hint" style="margin-top:6px;">Esta opción requiere validación manual del administrador antes de acreditarse.</p>
+          </details>
+          <div class="row" style="margin-top:14px;">
+            <button class="btn btn-ghost btn-block" onclick="document.getElementById('walletRecargaModal').remove()">Cancelar</button>
+          </div>
+        </div>
+      </div>`);
+  },
+  async pagarConBoldCliente(){
+    const comprador = UsuarioApp.compra.comprador;
+    const evento = UsuarioApp.eventoActual();
+    const monto = Number(document.getElementById('wcMonto').value);
+    if(!monto || monto<1000){ toast('Ingresa un monto válido (mínimo $1.000)', true); return; }
+    const btn = document.getElementById('wcBoldBtn');
+    if(btn){ btn.disabled=true; btn.textContent='Preparando pago...'; }
+    try{
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/bold-crear-orden-wallet', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
+        body: JSON.stringify({evento_id: evento.id, nombre:comprador.nombre, cedula:comprador.cedula, correo:comprador.correo, telefono:comprador.telefono, monto})
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error){
+        toast('No se pudo iniciar la recarga: '+(data.error||'este evento aún no tiene configurada la recarga con Bold (falta desplegar el edge function bold-crear-orden-wallet)'), true);
+        if(btn){ btn.disabled=false; btn.textContent='💳 Pagar con Bold (tarjeta, PSE, Nequi)'; }
+        return;
+      }
+      saveBoldOrder(data.order_id, null);
+      try{ sessionStorage.setItem('glm_bold_wallet_order_id', String(data.order_id)); }catch(e){}
+      document.getElementById('walletRecargaModal')?.remove();
+      const wrap = document.createElement('div');
+      wrap.id = 'boldDynamicCheckout';
+      wrap.style.cssText = 'position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.78);padding:20px;';
+      const card = document.createElement('div');
+      card.style.cssText = 'background:#140b28;border:1px solid #3d2a6b;border-radius:16px;padding:22px;max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.55);text-align:center;';
+      card.innerHTML = `<h3 style="margin:0 0 8px;font-family:Orbitron,sans-serif;">Recarga de saldo · Bold</h3><p class="hint" style="margin:0 0 16px;">Orden ${escapeHtml(data.order_id||'')} · ${money(data.amount)}</p>`;
+      const form = document.createElement('form');
+      form.style.cssText='display:flex;justify-content:center;';
+      const boldScript = document.createElement('script');
+      boldScript.src = 'https://checkout.bold.co/library/boldPaymentButton.js';
+      boldScript.setAttribute('data-bold-button','dark-L');
+      boldScript.setAttribute('data-order-id', data.order_id);
+      boldScript.setAttribute('data-currency', data.currency || 'COP');
+      boldScript.setAttribute('data-amount', String(data.amount));
+      boldScript.setAttribute('data-api-key', data.api_key);
+      boldScript.setAttribute('data-integrity-signature', data.integrity_signature);
+      boldScript.setAttribute('data-redirection-url', data.redirection_url);
+      boldScript.setAttribute('data-description', data.description || 'Recarga de saldo Cashless Colombia');
+      boldScript.setAttribute('data-customer-data', JSON.stringify({email:comprador.correo, fullName:comprador.nombre, phone:comprador.telefono, dialCode:'+57', documentNumber:comprador.cedula, documentType:'CC'}));
+      form.appendChild(boldScript);
+      card.appendChild(form);
+      const cancel = document.createElement('button');
+      cancel.type='button'; cancel.className='btn btn-ghost btn-block'; cancel.style.marginTop='14px'; cancel.textContent='Cancelar';
+      cancel.onclick=()=>wrap.remove();
+      card.appendChild(cancel);
+      wrap.appendChild(card);
+      document.body.appendChild(wrap);
+    }catch(err){
+      toast('Error iniciando la recarga con Bold: '+(err.message||err), true);
+      if(btn){ btn.disabled=false; btn.textContent='💳 Pagar con Bold (tarjeta, PSE, Nequi)'; }
+    }
+  },
+  async enviarComprobanteCliente(){
+    const comprador = UsuarioApp.compra.comprador;
+    const evento = UsuarioApp.eventoActual();
+    const monto = Number(document.getElementById('wcMonto').value);
+    const fileInput = document.getElementById('wcComprobante');
+    const file = fileInput && fileInput.files[0];
+    if(!monto || monto<1000){ toast('Ingresa un monto válido (mínimo $1.000)', true); return; }
+    if(!file){ toast('Adjunta el comprobante de pago', true); return; }
+    try{
+      const carpeta = 'wallet/' + comprador.correo.replace(/[^a-zA-Z0-9]+/g,'_');
+      const comprobante_url = await uploadToComprobantes(file, carpeta);
+      await this.registrarPendiente({evento_id:evento.id, correo:comprador.correo, cedula:comprador.cedula, nombre:comprador.nombre, telefono:comprador.telefono, monto, metodo_pago:'transferencia', comprobante_url});
+      document.getElementById('walletRecargaModal')?.remove();
+      toast('Comprobante enviado. Tu saldo se acreditará cuando el administrador lo apruebe.');
+      this.renderCliente();
+    }catch(err){
+      toast('Error enviando el comprobante: '+(err.message||err), true);
+    }
+  },
+  async renderCliente(){
+    const box = document.getElementById('u-wallet');
+    if(!box) return;
+    const evento = UsuarioApp.eventoActual();
+    const comprador = UsuarioApp.compra && UsuarioApp.compra.comprador;
+    if(!evento){ box.innerHTML = `<div class="card"><p class="hint">Selecciona un evento desde "Mis tickets" para ver tu wallet.</p></div>`; return; }
+    if(!evento.wallet_habilitada){ box.innerHTML = `<div class="card"><p class="hint">Este evento todavía no tiene la wallet habilitada.</p></div>`; return; }
+    if(!comprador || !comprador.correo){ box.innerHTML = `<div class="card"><p class="hint">Completa tus datos en "Comprar tickets" (nombre, cédula, correo, teléfono) para activar tu wallet.</p></div>`; return; }
+    box.innerHTML = `<div class="hint" style="padding:20px;">Cargando tu wallet…</div>`;
+    const wallet = await this.getWalletByCorreo(evento.id, comprador.correo);
+    const movs = wallet ? await this.getMovimientos(wallet.id, 60) : [];
+    box.innerHTML = `
+      <div style="max-width:480px; margin:0 auto 20px;">${this.cardHtml(wallet, evento, comprador)}</div>
+      <div style="max-width:480px; margin:0 auto 20px;">
+        <button class="btn btn-primary btn-block btn-lg" onclick="WalletKit.abrirRecargaCliente()">➕ Recargar saldo</button>
+      </div>
+      <div class="card" style="max-width:700px; margin:0 auto;">
+        <div class="section-title"><h2 style="font-size:17px;">Historial (recargas, consumos y compras sin saldo)</h2></div>
+        ${this.historialHtml(movs)}
+      </div>`;
+  },
+
+  /* ---------- recarga hecha por staff (VT/QR) tras escanear QR/NFC ---------- */
+  async panelStaffHtml(){
+    return `
+      <div class="card" style="max-width:520px; margin:0 auto;">
+        <div class="section-title"><h2 style="font-size:19px;">Recargar saldo</h2></div>
+        <p class="hint">Escanea el QR del ticket o acerca la pulsera/tarjeta NFC del cliente, o búscalo manualmente por correo/cédula.</p>
+        <div class="row" style="margin-bottom:10px;">
+          <button class="btn" onclick="WalletKit.staffScanQR()">📷 Escanear QR</button>
+          <button class="btn ${('NDEFReader' in window)?'':'btn-ghost'}" onclick="WalletKit.staffScanNFC()">📶 Leer NFC</button>
+        </div>
+        <div id="walletStaffScanBox"></div>
+        <div class="field"><label>Correo o cédula del cliente</label><input id="walletStaffBuscar" placeholder="correo@ejemplo.com o cédula" onkeydown="if(event.key==='Enter')WalletKit.staffBuscar()"></div>
+        <button class="btn btn-block" onclick="WalletKit.staffBuscar()">Buscar cliente</button>
+        <div id="walletStaffResultado" style="margin-top:16px;"></div>
+      </div>`;
+  },
+  _staffCtx(){
+    // Detecta si quien llama es QRApp o VTApp para saber evento/identidad/dónde re-renderizar.
+    if(Auth.role==='qr') return {app:QRApp, tabId:'q-wallet', tipo:'QR'};
+    if(Auth.role==='vt') return {app:VTApp, tabId:'v-wallet', tipo:'VT'};
+    return {app:null, tabId:null, tipo:''};
+  },
+  async staffScanQR(){
+    const box = document.getElementById('walletStaffScanBox');
+    if(!box) return;
+    box.innerHTML = `<div id="walletQrReader" style="max-width:280px;margin:0 auto;"></div>`;
+    await loadHtml5QrcodeLib();
+    const scanner = new Html5Qrcode('walletQrReader');
+    this._walletScanner = scanner;
+    scanner.start({facingMode:'environment'}, {fps:10, qrbox:220}, (text)=>{
+      scanner.stop().then(()=>scanner.clear()).catch(()=>{});
+      box.innerHTML='';
+      let codigo = text;
+      try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
+      this.staffBuscarPorCodigo(codigo);
+    }, ()=>{}).catch(()=>toast('No se pudo acceder a la cámara', true));
+  },
+  async staffScanNFC(){
+    if(!('NDEFReader' in window)){ toast('Este dispositivo/navegador no soporta NFC', true); return; }
+    try{
+      const reader = new NDEFReader();
+      await reader.scan();
+      toast('Acerca la pulsera/tarjeta NFC del cliente…');
+      reader.onreading = (event)=>{
+        const record = event.message.records[0];
+        const decoder = new TextDecoder();
+        const text = decoder.decode(record.data);
+        let codigo = text;
+        try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
+        this.staffBuscarPorCodigo(codigo);
+      };
+    }catch(e){ toast('No se pudo iniciar NFC: '+(e.message||e), true); }
+  },
+  async staffBuscarPorCodigo(codigo){
+    const {data} = await sb.from('tickets').select('*').eq('codigo', codigo).limit(1);
+    const ticket = data && data[0];
+    if(!ticket){ toast('No se encontró ningún ticket con ese código', true); return; }
+    await this.staffMostrarCliente(ticket.evento_id, {correo:ticket.correo, cedula:ticket.cedula, nombre:ticket.nombre_cliente, telefono:ticket.telefono});
+  },
+  async staffBuscar(){
+    const ctx = this._staffCtx();
+    const evento = ctx.app && ctx.app.evento;
+    const valor = document.getElementById('walletStaffBuscar').value.trim();
+    if(!valor){ toast('Escribe el correo o la cédula del cliente', true); return; }
+    if(!evento){ toast('Selecciona primero el evento', true); return; }
+    const {data} = await sb.from('tickets').select('*').eq('evento_id', evento.id).or(`correo.eq.${valor},cedula.eq.${valor}`).limit(1);
+    const ticket = data && data[0];
+    if(!ticket){ toast('No encontramos ningún ticket de este evento con ese correo/cédula', true); return; }
+    await this.staffMostrarCliente(evento.id, {correo:ticket.correo, cedula:ticket.cedula, nombre:ticket.nombre_cliente, telefono:ticket.telefono});
+  },
+  async staffMostrarCliente(eventoId, cliente){
+    const box = document.getElementById('walletStaffResultado');
+    if(!box) return;
+    const evento = await this.eventoWallet(eventoId);
+    if(!evento || !evento.wallet_habilitada){ box.innerHTML = `<div class="card"><p class="hint">Este evento no tiene la wallet habilitada.</p></div>`; return; }
+    const wallet = await this.getWalletByCorreo(eventoId, cliente.correo);
+    this._staffCliente = {...cliente, evento_id: eventoId};
+    box.innerHTML = `
+      <div style="max-width:420px; margin:0 auto 16px;">${this.cardHtml(wallet, evento, cliente)}</div>
+      <div class="card" style="max-width:420px; margin:0 auto;">
+        <div class="field"><label>Monto a recargar (COP)</label><input id="walletStaffMonto" type="number" min="1000" step="1000" placeholder="ej: 20000"></div>
+        <div class="field"><label>Método</label><select id="walletStaffMetodo"><option value="efectivo">Efectivo</option><option value="nfc">Datafono / tarjeta (NFC)</option></select></div>
+        <button class="btn btn-primary btn-block" onclick="WalletKit.staffConfirmarRecarga()">➕ Confirmar recarga</button>
+      </div>`;
+  },
+  // Variante usada dentro del overlay de resultado de escaneo (QRApp.showResult):
+  // muestra el saldo y el formulario de recarga inline, sin depender de la
+  // pestaña "💳 Recargar saldo".
+  async staffMostrarClienteEnOverlay(eventoId, cliente, btnEl){
+    if(btnEl) btnEl.remove();
+    const wrap = document.getElementById('qrWalletInline');
+    if(!wrap) return;
+    const evento = await this.eventoWallet(eventoId);
+    const wallet = await this.getWalletByCorreo(eventoId, cliente.correo);
+    this._overlayCliente = {...cliente, evento_id: eventoId};
+    wrap.innerHTML = `
+      <div style="max-width:320px; margin:10px auto 0;">${this.cardHtml(wallet, evento, cliente)}</div>
+      <div class="row" style="margin-top:10px; justify-content:center;">
+        <div class="field" style="flex:1; max-width:140px;"><input id="qrWalletMonto" type="number" min="1000" step="1000" placeholder="Monto"></div>
+        <div class="field" style="flex:1; max-width:150px;"><select id="qrWalletMetodo"><option value="efectivo">Efectivo</option><option value="nfc">Datafono</option></select></div>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="WalletKit.confirmarRecargaOverlay()">➕ Confirmar recarga</button>`;
+  },
+  async confirmarRecargaOverlay(){
+    const cliente = this._overlayCliente;
+    if(!cliente) return;
+    const monto = Number(document.getElementById('qrWalletMonto').value);
+    const metodo = document.getElementById('qrWalletMetodo').value;
+    if(!monto || monto<=0){ toast('Ingresa un monto válido', true); return; }
+    try{
+      await this.ajustar({
+        evento_id: cliente.evento_id, correo: cliente.correo, cedula: cliente.cedula, nombre: cliente.nombre, telefono: cliente.telefono,
+        monto, tipo:'recarga', metodo_pago: metodo,
+        registrado_por: (Auth.role==='qr'&&QRApp.identity) ? ('QR · '+QRApp.identity.usuario) : ((Auth.role==='vt'&&VTApp.identity) ? ('VT · '+VTApp.identity.usuario) : ''),
+        descripcion: 'Recarga al escanear ticket/pulsera NFC'
+      });
+      toast('Saldo recargado correctamente');
+      await this.staffMostrarClienteEnOverlay(cliente.evento_id, cliente, null);
+    }catch(err){
+      toast('No se pudo recargar: '+(err.message||err), true);
+    }
+  },
+  async staffConfirmarRecarga(){
+    const ctx = this._staffCtx();
+    const cliente = this._staffCliente;
+    if(!cliente){ toast('Busca primero al cliente', true); return; }
+    const monto = Number(document.getElementById('walletStaffMonto').value);
+    const metodo = document.getElementById('walletStaffMetodo').value;
+    if(!monto || monto<=0){ toast('Ingresa un monto válido', true); return; }
+    try{
+      await this.ajustar({
+        evento_id: cliente.evento_id, correo: cliente.correo, cedula: cliente.cedula, nombre: cliente.nombre, telefono: cliente.telefono,
+        monto, tipo:'recarga', metodo_pago: metodo,
+        registrado_por: ctx.app && ctx.app.identity ? (ctx.tipo+' · '+ctx.app.identity.usuario) : ctx.tipo,
+        descripcion: 'Recarga en punto de atención'
+      });
+      toast('Saldo recargado correctamente');
+      await this.staffMostrarCliente(cliente.evento_id, cliente);
+    }catch(err){
+      toast('No se pudo recargar: '+(err.message||err), true);
+    }
+  }
+};
+
+/* =========================================================
    INIT
 ========================================================= */
 document.addEventListener('DOMContentLoaded', async ()=>{
@@ -7011,6 +7515,18 @@ async function checkBoldReturn(){
   // un intento anterior reapareciera cada vez que se abría/refrescaba la página.
   const orderId = params.get('bold-order-id') || params.get('bold_order_id');
   if(!orderId) return;
+
+  // Las recargas de wallet usan una orden Bold distinta a la de compra de
+  // tickets (bold-crear-orden-wallet en vez de bold-crear-orden). La
+  // distinguimos por el id guardado en sessionStorage al abrir el checkout
+  // (ver WalletKit.pagarConBoldCliente) para no mezclarla con el flujo de
+  // compra de tickets de más abajo.
+  const walletOrderId = sessionStorage.getItem('glm_bold_wallet_order_id');
+  if(walletOrderId && walletOrderId === orderId){
+    history.replaceState(null, '', location.pathname + location.hash);
+    await checkBoldReturnWallet(orderId);
+    return;
+  }
 
   const solicitudId = params.get('solicitud_id') || params.get('solicitud-id') || sessionStorage.getItem('glm_bold_solicitud_id') || '';
   history.replaceState(null, '', location.pathname + location.hash);
@@ -7095,6 +7611,64 @@ async function checkBoldReturn(){
       clearBoldOrder();
     }else{
       msg.innerHTML = 'No se pudo confirmar ningún pago. Si no realizaste el pago, no se generaron entradas. Puedes cerrar esta ventana y volver a intentarlo cuando quieras.';
+      clearBoldOrder();
+    }
+  }
+}
+
+// Equivalente a checkBoldReturn() pero para una recarga de saldo de wallet
+// (orden creada por bold-crear-orden-wallet). Verifica el pago con el mismo
+// endpoint bold-verificar-pago y luego confirma que el webhook ya haya
+// acreditado el movimiento en wallet_movimientos (vía wallet_acreditar_bold)
+// antes de mostrar "saldo acreditado".
+async function checkBoldReturnWallet(orderId){
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-bg" id="boldResultModal">
+      <div class="modal" style="text-align:center;">
+        <div class="section-title"><h2 style="font-size:19px;">Confirmando tu recarga con Bold…</h2></div>
+        <p class="hint" id="boldResultMsg">Estamos verificando el estado de tu transacción, esto puede tardar unos segundos.</p>
+        <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="clearBoldOrder();document.getElementById('boldResultModal')?.remove()">Cerrar</button>
+      </div>
+    </div>`);
+
+  let estado = 'pendiente_pago';
+  let acreditado = false;
+
+  for(let i=0;i<10;i++){
+    try{
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/bold-verificar-pago?order_id=' + encodeURIComponent(orderId), {
+        headers: {'Authorization':'Bearer '+SUPA_KEY, 'apikey':SUPA_KEY}
+      });
+      const data = await res.json().catch(()=>({}));
+      estado = data.estado || estado;
+
+      // La confirmación visible exige que el webhook ya haya corrido
+      // wallet_acreditar_bold (movimiento 'aprobada' con este order_id),
+      // igual que con tickets se exige que ya existan los tickets creados.
+      const {data: movRows} = await sb.from('wallet_movimientos').select('id,estado').eq('bold_order_id', orderId).eq('estado','aprobada').limit(1);
+      acreditado = !!(movRows && movRows[0]);
+
+      if(estado==='rechazada') break;
+      if(estado==='aprobada' && acreditado) break;
+    }catch(e){
+      // Se sigue intentando porque el webhook de Bold puede llegar unos segundos después.
+    }
+    await new Promise(r=>setTimeout(r, 2500));
+  }
+
+  const msg = document.getElementById('boldResultMsg');
+  if(msg){
+    if(estado==='aprobada' && acreditado){
+      msg.innerHTML = '¡Pago confirmado! 🎉 Tu saldo ya quedó acreditado en tu wallet.';
+      clearBoldOrder();
+      // Si la persona sigue con su sesión de cliente en memoria, refrescamos
+      // de inmediato la tarjeta de wallet para que vea el nuevo saldo.
+      try{ UsuarioApp.tab('u-wallet'); }catch(e){}
+    }else if(estado==='rechazada'){
+      msg.innerHTML = 'El pago no fue aprobado por Bold. Puedes intentar la recarga de nuevo desde "Mi Wallet".';
+      clearBoldOrder();
+    }else{
+      msg.innerHTML = 'El pago fue aprobado y estamos terminando de acreditar tu saldo. Espera unos segundos y vuelve a abrir "Mi Wallet".';
       clearBoldOrder();
     }
   }
