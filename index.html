@@ -319,26 +319,33 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 }
 @media(max-width:600px){.evt-slide{height:230px; border-radius:18px;}}
 .evt-slide.is-active{border-color:rgba(0,240,255,.5); box-shadow:var(--shadow), var(--glow-cyan);}
-.evt-slide img{width:100%; height:100%; object-fit:cover; display:block; pointer-events:none;}
+.evt-slide img, .evt-slide video{width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; background:#050308;}
 .evt-slide .evt-slide-fallback{
   width:100%; height:100%; display:flex; align-items:center; justify-content:center; text-align:center; padding:10px;
   font-family:'Orbitron',sans-serif; font-size:16px; background:linear-gradient(160deg, rgba(255,46,224,.25), rgba(0,240,255,.18));
 }
 .evt-slide .evt-slide-info{
-  position:absolute; left:0; right:0; bottom:0; padding:20px 22px 18px;
-  background:linear-gradient(0deg, rgba(0,0,0,.9) 15%, rgba(0,0,0,.45) 65%, rgba(0,0,0,0));
+  position:absolute; left:0; right:0; bottom:0; padding:22px 22px 20px;
+  background:linear-gradient(0deg, rgba(5,3,10,.96) 12%, rgba(5,3,10,.62) 55%, rgba(5,3,10,0));
   color:#fff; opacity:0; transform:translateY(8px); transition:opacity .4s, transform .4s; pointer-events:none;
 }
 .evt-slide.is-active .evt-slide-info{opacity:1; transform:translateY(0);}
-.evt-slide .evt-slide-info b{display:block; font-size:21px; font-family:'Orbitron',sans-serif; letter-spacing:.01em;}
-.evt-slide .evt-slide-info span{font-size:12.5px; color:var(--cyan); font-weight:600;}
-@media(max-width:600px){.evt-slide .evt-slide-info{padding:14px 16px 12px;} .evt-slide .evt-slide-info b{font-size:16px;} .evt-slide .evt-slide-info span{font-size:11px;}}
-.evt-slide .evt-slide-cta{
-  position:absolute; top:16px; right:16px; font-size:11px; padding:5px 12px; border-radius:20px;
-  background:rgba(0,240,255,.92); color:#0a0a0a; font-weight:700; letter-spacing:.02em;
-  opacity:0; transform:translateY(-4px); transition:opacity .4s, transform .4s; pointer-events:none;
+.evt-slide .evt-slide-info b{display:block; font-size:22px; font-family:'Orbitron',sans-serif; letter-spacing:.01em; margin-top:2px;}
+@media(max-width:600px){.evt-slide .evt-slide-info{padding:15px 16px 14px;} .evt-slide .evt-slide-info b{font-size:16px;}}
+/* pill de fecha, al estilo "badge" sobre la portada (video o imagen) */
+.evt-slide .evt-slide-info .evt-slide-pill{
+  display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; letter-spacing:.03em;
+  padding:4px 11px; border-radius:99px; background:rgba(157,77,255,.22); border:1px solid var(--line-soft);
+  color:var(--text); backdrop-filter:blur(4px);
 }
-.evt-slide.is-active .evt-slide-cta{opacity:1; transform:translateY(0);}
+@media(max-width:600px){.evt-slide .evt-slide-info .evt-slide-pill{font-size:9.5px; padding:3px 9px;}}
+/* botón CTA grande y redondeado bajo el título, en degradado neón */
+.evt-slide .evt-slide-info .evt-slide-cta{
+  display:inline-flex; align-items:center; gap:8px; margin-top:12px; padding:10px 20px; border-radius:99px;
+  background:linear-gradient(120deg, var(--pink), var(--violet)); color:#fff; font-weight:800; font-size:12.5px;
+  letter-spacing:.02em; box-shadow:var(--glow-pink); border:none;
+}
+@media(max-width:600px){.evt-slide .evt-slide-info .evt-slide-cta{padding:8px 16px; font-size:11px; margin-top:8px;}}
 .evt-slider-navcol{position:absolute; top:50%; right:0; transform:translateY(-50%); display:flex; flex-direction:column; gap:12px; z-index:30;}
 .evt-slider-nav{
   width:38px; height:38px; border-radius:50%;
@@ -356,7 +363,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
   transition:.2s;
 }
 .evt-picker-card:hover{border-color:var(--cyan); transform:translateY(-3px);}
-.evt-picker-card img{width:100%; height:120px; object-fit:cover; display:block; background:#0e0a1e;}
+.evt-picker-card img, .evt-picker-card video{width:100%; height:120px; object-fit:cover; display:block; background:#0e0a1e; pointer-events:none;}
 .evt-picker-card .evt-picker-body{padding:10px 12px;}
 .evt-picker-card b{display:block; font-family:'Orbitron',sans-serif; font-size:14px;}
 .evt-picker-card span{font-size:11.5px; color:var(--text-dim);}
@@ -1165,29 +1172,6 @@ function toast(msg, err){
   setTimeout(()=>{ el.remove(); }, 4200);
 }
 function money(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
-/* Copia cualquier texto (por ejemplo el UUID del evento) al portapapeles.
-   Usa la Clipboard API moderna y cae a un <textarea> temporal si el
-   navegador/contexto no la permite (http sin TLS, permisos, etc). */
-async function copiarTexto(texto, mensaje){
-  try{
-    if(navigator.clipboard && window.isSecureContext){
-      await navigator.clipboard.writeText(texto);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = texto;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.focus(); ta.select();
-      document.execCommand('copy');
-      ta.remove();
-    }
-    toast(mensaje || 'Copiado al portapapeles');
-  }catch(e){
-    console.error(e);
-    toast('No se pudo copiar: '+e.message, true);
-  }
-}
 /* ---------- Exportar / Importar evento (CSV) ----------
    Permite descargar toda la configuración de un evento (nombre, fecha,
    hora, estado, imagen y el objeto "mapa" con pisos/palcos/VIP/general/
@@ -1537,6 +1521,34 @@ function descargarImagen(dataUrl, filename){
 }
 function escapeHtml(s){
   return (s||'').toString().replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+// Convierte un enlace de Google Drive ("Compartir" -> .../file/d/ID/view o
+// .../open?id=ID) en un enlace directo reproducible como <video src="...">.
+// Cualquier otra URL (mp4 directo, otro hosting) se deja tal cual.
+// Requisito indispensable en Drive: el archivo debe compartirse como
+// "Cualquier persona con el enlace" (visor), si no, el navegador no podrá
+// reproducirlo aunque la URL esté bien formada.
+function normalizeVideoUrl(url){
+  url = (url||'').trim();
+  if(!url) return '';
+  const m = url.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([a-zA-Z0-9_-]+)/);
+  if(m && m[1]) return `https://drive.google.com/uc?export=download&id=${m[1]}`;
+  return url;
+}
+// Portada (imagen o video en loop) para las tarjetas pequeñas de selección de
+// evento (comprar tickets / escanear / vender), reutilizada en los 3 lugares
+// donde aparece ese grid para no repetir la misma lógica de fallback 3 veces.
+function pickerMediaHtml(e){
+  if(e.video_url){
+    return `<video src="${escapeHtml(e.video_url)}"${e.imagen_url?` poster="${escapeHtml(e.imagen_url)}"`:''} autoplay muted loop playsinline preload="metadata"
+              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"></video>
+            <div class="evt-slide-fallback" style="display:none; height:120px;">${escapeHtml(e.nombre)}</div>`;
+  }
+  if(e.imagen_url){
+    return `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+            <div class="evt-slide-fallback" style="display:none; height:120px;">${escapeHtml(e.nombre)}</div>`;
+  }
+  return `<div class="evt-slide-fallback" style="height:120px;">${escapeHtml(e.nombre)}</div>`;
 }
 // Sube un archivo al bucket de Storage "comprobantes" y devuelve su URL pública.
 async function uploadToComprobantes(file, folder){
@@ -2242,72 +2254,6 @@ const Seats = {
       for(let n=existentesCat+1; n<=(c.cantidad||0); n++){ rows.push({evento_id:evento.id, zona:c.id, numero:`${prefix}-${n}`}); }
     });
     if(rows.length) await sb.from('asientos').insert(rows);
-  },
-  // Detecta y borra "ubicaciones fantasma": filas de la tabla "asientos" que
-  // quedaron guardadas en Supabase pero que ya NO corresponden a la
-  // configuración actual del "mapa" del evento (por ejemplo, sillas de un
-  // palco/VIP/categoría que se creó por error o de una versión anterior del
-  // evento). Como TODAS las pantallas (admin, cliente, vendedor, taquilla)
-  // leen los asientos con Seats.all(), una fila huérfana se ve como una
-  // ubicación real en cualquier usuario aunque el admin nunca la pidió.
-  // Por seguridad, solo se borran asientos LIBRES (ocupado=false): un puesto
-  // ya vendido/ocupado nunca se toca, aunque haya quedado fuera del mapa
-  // actual, para no romper tickets ya emitidos.
-  async detectarFantasmas(eventoId){
-    const {data: eventoRows} = await sb.from('eventos').select('mapa').eq('id', eventoId).limit(1);
-    const mapa = (eventoRows && eventoRows[0] && eventoRows[0].mapa) || {};
-    const sillasPalco = Number(mapa.sillasPalco)||8;
-    const sillasVip = Number(mapa.sillasVip)||8;
-    const totalPalcos = Number(mapa.palcos)||0;
-    const totalVip = Number(mapa.vipUbicaciones)||0;
-    const totalGeneral = Number(mapa.general)||0;
-    const categoriasValidas = {};
-    (mapa.categorias||[]).forEach(c=>{ categoriasValidas[c.id] = Number(c.cantidad)||0; });
-    const {data} = await sb.from('asientos').select('*').eq('evento_id', eventoId);
-    const asientos = data || [];
-    const esValido = (a)=>{
-      if(a.zona==='palco'){
-        const [pKey, sKey] = a.numero.split('-');
-        const p = parseInt((pKey||'').replace('P',''),10);
-        const s = parseInt((sKey||'').replace('S',''),10);
-        return p>=1 && p<=totalPalcos && s>=1 && s<=sillasPalco;
-      }
-      if(a.zona==='vip'){
-        if(!a.numero.includes('-')) return true; // VIP plano de formato antiguo: se respeta siempre
-        const [vKey, sKey] = a.numero.split('-');
-        const v = parseInt((vKey||'').replace('VIP',''),10);
-        const s = parseInt((sKey||'').replace('S',''),10);
-        return v>=1 && v<=totalVip && s>=1 && s<=sillasVip;
-      }
-      if(a.zona==='general'){
-        const g = parseInt((a.numero||'').replace('G',''),10);
-        return g>=1 && g<=totalGeneral;
-      }
-      // Categoría personalizada: la zona debe existir en mapa.categorias y el
-      // número de puesto no debe superar la cantidad configurada.
-      if(Object.prototype.hasOwnProperty.call(categoriasValidas, a.zona)){
-        const n = parseInt((a.numero||'').split('-').pop(),10);
-        return n>=1 && n<=categoriasValidas[a.zona];
-      }
-      // Zona que ya no existe en mapa.categorias en absoluto: fantasma.
-      return false;
-    };
-    const fantasmas = asientos.filter(a=> !esValido(a));
-    const libres = fantasmas.filter(a=> !a.ocupado);
-    const ocupados = fantasmas.filter(a=> a.ocupado);
-    return {libres, ocupados};
-  },
-  async limpiarFantasmas(eventoId){
-    const {libres, ocupados} = await this.detectarFantasmas(eventoId);
-    if(libres.length){
-      const ids = libres.map(a=>a.id);
-      // Supabase .in() soporta muchos ids, pero se envía en lotes por si el
-      // evento tiene demasiados asientos huérfanos acumulados.
-      for(let i=0;i<ids.length;i+=500){
-        await sb.from('asientos').delete().in('id', ids.slice(i,i+500));
-      }
-    }
-    return {eliminados: libres.length, ocupadosOmitidos: ocupados.length};
   },
   async free(eventoId, zona, palco){
     let q = sb.from('asientos').select('*').eq('evento_id',eventoId).eq('zona',zona).eq('ocupado',false).order('numero').limit(80);
@@ -3269,15 +3215,26 @@ const EventSlider = {
   },
   slideHtml(e,i){
     const fecha = e.fecha ? `${e.fecha}${e.hora?' · '+e.hora:''}` : 'Fecha por confirmar';
-    const img = e.imagen_url
-      ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+    // Portada del evento: si el admin cargó un video de fondo (mp4 directo o
+    // enlace de Google Drive), se reproduce en loop/silenciado como fondo del
+    // slide (igual que el video de referencia); si falla o no hay video, cae
+    // a la imagen/flyer; si tampoco hay imagen, cae al fondo de texto de siempre.
+    const media = e.video_url
+      ? `<video src="${escapeHtml(e.video_url)}"${e.imagen_url?` poster="${escapeHtml(e.imagen_url)}"`:''} autoplay muted loop playsinline preload="metadata"
+           onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"></video>
          <div class="evt-slide-fallback" style="display:none;">${escapeHtml(e.nombre)}</div>`
-      : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`;
+      : e.imagen_url
+        ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+           <div class="evt-slide-fallback" style="display:none;">${escapeHtml(e.nombre)}</div>`
+        : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`;
     return `
       <div class="evt-slide" data-i="${i}" data-id="${e.id}">
-        ${img}
-        <span class="evt-slide-cta">🎟️ Comprar</span>
-        <div class="evt-slide-info"><b>${escapeHtml(e.nombre)}</b><span>📅 ${escapeHtml(fecha)}</span></div>
+        ${media}
+        <div class="evt-slide-info">
+          <span class="evt-slide-pill">📅 ${escapeHtml(fecha)}</span>
+          <b>${escapeHtml(e.nombre)}</b>
+          <span class="evt-slide-cta">🎟️ Comprar entradas</span>
+        </div>
       </div>`;
   },
   // Recalcula la posición/escala de cada tarjeta según su distancia a la
@@ -3724,7 +3681,7 @@ const UsuarioApp = {
           <div class="evt-picker-grid">
             ${eventos.map(e=>`
               <div class="evt-picker-card" onclick="UsuarioApp.elegirEventoCompra('${e.id}')">
-                ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
+                ${pickerMediaHtml(e)}
                 <div class="evt-picker-body">
                   <b>${escapeHtml(e.nombre)}</b>
                   <span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span>
@@ -4519,7 +4476,10 @@ const AdminApp = {
           </div>
           <div class="field"><label>Nombre del evento</label><input id="evNombre" placeholder="ej: Cashless Fest 2026"></div>
           <div class="field"><label>Imagen / flyer del evento</label><input id="evImagen" type="file" accept="image/*">
-            <p class="hint" style="margin-top:4px;">Se mostrará en el slider de publicidad del inicio.</p>
+            <p class="hint" style="margin-top:4px;">Se mostrará en el slider de publicidad del inicio (y como imagen de respaldo mientras carga el video, si agregas uno abajo).</p>
+          </div>
+          <div class="field"><label>Video de fondo (opcional)</label><input id="evVideo" type="text" placeholder="Pega aquí el enlace del video (Google Drive u otro)">
+            <p class="hint" style="margin-top:4px;">Si lo agregas, reemplaza la imagen como fondo del evento en el slider de inicio (en loop y sin sonido). Para usar un video de Google Drive: súbelo a Drive, clic derecho → "Compartir" → cambia el acceso a "Cualquier persona con el enlace" → copia ese enlace y pégalo aquí.</p>
           </div>
           <div class="row">
             <div class="field" style="flex:1;"><label>Fecha</label><input id="evFecha" type="date"></div>
@@ -4590,19 +4550,12 @@ const AdminApp = {
     const list = document.getElementById('evList');
     if(!this.eventos.length){ list.innerHTML = `<p class="hint">Aún no has creado eventos.</p>`; return; }
     list.innerHTML = this.eventos.map(e=>`
-      <div class="stat" style="margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
-        <div style="flex:1; min-width:220px;">
+      <div class="stat" style="margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <div>
           <b style="font-size:18px;">${escapeHtml(e.nombre)}</b>
           <div class="hint mono">${e.codigo} · ${e.fecha||'sin fecha'} ${e.hora||''}</div>
           <span class="badge ${e.estado==='activo'?'ok':'bad'}">${e.estado}</span>
           ${this.evento && this.evento.id===e.id ? '<span class="badge neutral">seleccionado</span>':''}
-          <div style="margin-top:10px; padding:10px 12px; border:1px dashed var(--line); border-radius:10px; background:var(--bg-soft, rgba(255,255,255,0.03));">
-            <div class="hint" style="margin-bottom:4px;">ID del evento (para el servidor local)</div>
-            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-              <code style="font-size:16px; font-weight:700; word-break:break-all; user-select:all;">${e.id}</code>
-              <button type="button" class="btn btn-sm btn-primary" onclick="copiarTexto('${e.id}','ID del evento copiado')">📋 Copiar ID</button>
-            </div>
-          </div>
         </div>
         <div class="row" style="flex-wrap:wrap;">
           <button class="btn btn-sm" onclick="AdminApp.selectEvento('${e.id}')">Seleccionar</button>
@@ -4610,9 +4563,16 @@ const AdminApp = {
           <button class="btn btn-sm" onclick="AdminApp.openAjustarMapa('${e.id}')">Ajustar palcos/VIP</button>
           <button class="btn btn-sm" onclick="AdminApp.configurarPago('${e.id}')">Config. de pago</button>
           <button class="btn btn-sm" onclick="AdminApp.exportarEvento('${e.id}')">⬇️ Exportar</button>
-          <button class="btn btn-sm" onclick="AdminApp.limpiarFantasmas('${e.id}')">🧹 Limpiar ubicaciones fantasma</button>
         </div>
         <div id="mapaEdit-${e.id}" class="hide" style="margin-top:10px; border-top:1px dashed var(--line); padding-top:10px;">
+          <div style="border:1px dashed var(--line-soft); border-radius:12px; padding:12px; margin-bottom:14px;">
+            <label style="display:block; margin-bottom:8px; font-size:13px; color:var(--text-dim);">Portada del evento (imagen/video del slider de inicio)</label>
+            <div class="field"><label>Reemplazar imagen / flyer</label><input id="mapaEditImagen-${e.id}" type="file" accept="image/*"></div>
+            <div class="field"><label>Video de fondo (opcional)</label><input id="mapaEditVideo-${e.id}" type="text" value="${escapeHtml(e.video_url||'')}" placeholder="Pega aquí el enlace del video (Google Drive u otro)">
+              <p class="hint" style="margin-top:4px;">Deja el campo vacío para quitar el video y volver a mostrar solo la imagen. Enlace de Drive: clic derecho → "Compartir" → "Cualquier persona con el enlace".</p>
+            </div>
+            <button class="btn btn-sm" type="button" onclick="AdminApp.guardarPortada('${e.id}')">Guardar portada</button>
+          </div>
           <div class="field">
             <label>¿Cuántos pisos tiene el evento?</label>
             <select id="mapaEditPisos-${e.id}" onchange="AdminApp.togglePisoWraps('${e.id}')">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${n===((e.mapa&&Number(e.mapa.pisos))||1)?'selected':''}>${n===1?'1 (un solo nivel)':n+' pisos'}</option>`).join('')}</select>
@@ -5016,6 +4976,27 @@ const AdminApp = {
     toast('Mapa actualizado: '+palcos+' palcos ('+sillasPalco+' sillas c/u), '+vipUbicaciones+' ubicaciones VIP ('+sillasVip+' sillas c/u), '+general+' general');
     this.renderEventos();
   },
+  // Actualiza solo la portada del evento (imagen/flyer y/o video de fondo)
+  // que se muestra en el slider de publicidad del inicio. Independiente del
+  // resto del "mapa" (palcos/VIP/general) para no arriesgar esos datos.
+  async guardarPortada(id){
+    const evento = this.eventos.find(e=>e.id===id);
+    if(!evento) return;
+    const cambios = {};
+    const imgFile = document.getElementById('mapaEditImagen-'+id).files[0];
+    if(imgFile){
+      try{ cambios.imagen_url = await uploadToBucket('eventos', imgFile, evento.codigo||id); }
+      catch(e){ console.error(e); toast('No se pudo subir la imagen: '+e.message, true); return; }
+    }
+    const videoInput = document.getElementById('mapaEditVideo-'+id).value;
+    cambios.video_url = normalizeVideoUrl(videoInput) || null;
+    const {error} = await sb.from('eventos').update(cambios).eq('id', id);
+    if(error){ toast('Error actualizando la portada: '+error.message, true); console.error(error); return; }
+    Object.assign(evento, cambios);
+    if(this.evento && this.evento.id===id) Object.assign(this.evento, cambios);
+    toast('Portada actualizada');
+    this.renderEventos();
+  },
   async crearEvento(){
     const nombre = document.getElementById('evNombre').value.trim();
     const fecha = document.getElementById('evFecha').value || null;
@@ -5066,7 +5047,8 @@ const AdminApp = {
       try{ imagen_url = await uploadToBucket('eventos', imgFile, codigo); }
       catch(e){ console.error(e); toast('El evento se creará, pero no se pudo subir la imagen: '+e.message, true); }
     }
-    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url}).select();
+    const video_url = normalizeVideoUrl(document.getElementById('evVideo').value) || null;
+    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url, video_url}).select();
     if(error){ toast('Error creando el evento: '+error.message, true); console.error(error); return; }
     toast('Evento creado: '+codigo);
     delete this._catState['nuevo'];
@@ -5085,45 +5067,11 @@ const AdminApp = {
   exportarEvento(id){
     const e = this.eventos.find(x=>x.id===id);
     if(!e){ toast('Evento no encontrado', true); return; }
-    const headers = ['nombre','codigo','fecha','hora','estado','imagen_url','mapa'];
-    const fila = [e.nombre||'', e.codigo||'', e.fecha||'', e.hora||'', e.estado||'', e.imagen_url||'', JSON.stringify(e.mapa||{})];
+    const headers = ['nombre','codigo','fecha','hora','estado','imagen_url','video_url','mapa'];
+    const fila = [e.nombre||'', e.codigo||'', e.fecha||'', e.hora||'', e.estado||'', e.imagen_url||'', e.video_url||'', JSON.stringify(e.mapa||{})];
     const csv = csvBuildRow(headers) + '\r\n' + csvBuildRow(fila) + '\r\n';
     descargarArchivo('evento_'+(e.codigo||e.id)+'.csv', csv);
     toast('Evento exportado. Usa "Importar evento" en la otra plataforma para crearlo allá.');
-  },
-  /* Revisa la tabla "asientos" del evento contra la configuración actual del
-     "mapa" (pisos/palcos/VIP/general/categorías) y borra las filas que ya no
-     corresponden a nada configurado por el admin ("ubicaciones fantasma").
-     Solo borra puestos LIBRES; si encuentra alguno ocupado/vendido fuera de
-     la config actual, lo deja intacto y avisa para que el admin decida a
-     mano (ajustando el mapa en vez de perder un ticket ya emitido). */
-  async limpiarFantasmas(id){
-    const e = this.eventos.find(x=>x.id===id);
-    if(!e){ toast('Evento no encontrado', true); return; }
-    toast('Revisando ubicaciones de "'+e.nombre+'"…');
-    let resumen;
-    try{ resumen = await Seats.detectarFantasmas(id); }
-    catch(err){ console.error(err); toast('No se pudo revisar el evento: '+err.message, true); return; }
-    const {libres, ocupados} = resumen;
-    if(!libres.length && !ocupados.length){
-      toast('No se encontraron ubicaciones fantasma en este evento.');
-      return;
-    }
-    const detalle = libres.length
-      ? `Se encontraron ${libres.length} puesto(s) libres que ya no están en la configuración actual del mapa. ¿Borrarlos?`
-      : 'No hay puestos libres para borrar.';
-    if(libres.length && !confirm(detalle)){ toast('Limpieza cancelada'); return; }
-    let out = {eliminados:0, ocupadosOmitidos: ocupados.length};
-    if(libres.length){
-      try{ out = await Seats.limpiarFantasmas(id); }
-      catch(err){ console.error(err); toast('Error borrando ubicaciones fantasma: '+err.message, true); return; }
-    }
-    if(out.ocupadosOmitidos>0){
-      toast(`Se borraron ${out.eliminados} ubicación(es) fantasma. ${out.ocupadosOmitidos} estaban ocupadas y NO se tocaron (tienen ticket asignado); ajusta el mapa si quieres incluirlas oficialmente.`, out.eliminados===0);
-    } else {
-      toast(out.eliminados>0 ? `Se borraron ${out.eliminados} ubicación(es) fantasma.` : 'No había ubicaciones fantasma libres para borrar.');
-    }
-    if(this.evento && this.evento.id===id) await Seats.all(id); // refresca reconciliación por si algo cambió
   },
   /* Lee el .csv generado por "exportarEvento" y crea un evento nuevo (con
      código propio) igual al original: mismo nombre, fecha, hora y "mapa"
@@ -5149,7 +5097,8 @@ const AdminApp = {
     try{ mapa = JSON.parse(get('mapa') || '{}'); }
     catch(e){ toast('El campo "mapa" del archivo no es un JSON válido', true); return; }
     const codigo = genCode('EVT');
-    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url:null}).select();
+    const video_url = normalizeVideoUrl(get('video_url')) || null;
+    const {data, error} = await sb.from('eventos').insert({nombre, codigo, fecha, hora, estado:'activo', mapa, imagen_url:null, video_url}).select();
     if(error){ toast('Error importando el evento: '+error.message, true); console.error(error); return; }
     toast('Evento importado: '+codigo+'. Si necesitas la imagen, súbela de nuevo desde "Ajustar palcos/VIP" o al editar el evento.');
     if(inp) inp.value = '';
@@ -5885,7 +5834,7 @@ const QRApp = {
         <div class="evt-picker-grid">
           ${eventos.map(e=>`
             <div class="evt-picker-card" onclick="QRApp.elegirEvento('${e.id}')">
-              ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
+              ${pickerMediaHtml(e)}
               <div class="evt-picker-body"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span></div>
             </div>`).join('')}
         </div>
@@ -6066,7 +6015,7 @@ const VTApp = {
         <div class="evt-picker-grid">
           ${eventos.map(e=>`
             <div class="evt-picker-card" onclick="VTApp.elegirEvento('${e.id}')">
-              ${e.imagen_url ? `<img src="${escapeHtml(e.imagen_url)}" alt="${escapeHtml(e.nombre)}" loading="lazy">` : `<div class="evt-slide-fallback">${escapeHtml(e.nombre)}</div>`}
+              ${pickerMediaHtml(e)}
               <div class="evt-picker-body"><b>${escapeHtml(e.nombre)}</b><span>${escapeHtml(e.fecha||'Fecha por confirmar')} ${escapeHtml(e.hora||'')}</span></div>
             </div>`).join('')}
         </div>
