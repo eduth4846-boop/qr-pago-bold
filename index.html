@@ -1421,6 +1421,101 @@ function toast(msg, err){
   setTimeout(()=>{ el.remove(); }, 4200);
 }
 function money(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
+
+/* =========================================================
+   NFC compartido (Web NFC / NDEFReader)
+   El navegador solo permite UNA operación de NFC activa a la vez
+   (una lectura "scan" o una escritura "write") en toda la pestaña.
+   Antes, cada parte de la app (validar entrada por NFC, "Leer NFC" en
+   recargar saldo, "Vincular NFC" en Mis ventas) creaba su propio
+   `new NDEFReader()` por separado y nunca cancelaba nada — si una
+   lectura anterior quedaba "pegada" (por ejemplo el vendedor entró a
+   "Recargar saldo", tocó "Leer NFC" y salió de la pestaña sin que se
+   completara), la siguiente operación (como "Vincular NFC") chocaba
+   con la anterior y Chrome respondía exactamente con el error que
+   reportó el usuario: "Push is cancelled due to a new push request".
+   NfcKit centraliza TODO el acceso a NDEFReader en un solo lugar y
+   cancela (AbortController) cualquier operación anterior antes de
+   iniciar una nueva, para que ese choque ya no pueda pasar.
+========================================================= */
+const NfcKit = {
+  supported(){ return 'NDEFReader' in window; },
+  _controller: null,
+  _cancelarAnterior(){
+    if(this._controller){
+      try{ this._controller.abort(); }catch(e){}
+      this._controller = null;
+    }
+  },
+  // Lee el próximo tag/pulsera que se acerque y devuelve su texto (una
+  // sola lectura). onEsperando() se llama apenas el lector queda listo,
+  // para poder avisar "acerca el tag" en la UI.
+  leerUnaVez(onEsperando){
+    if(!this.supported()) return Promise.reject(new Error('Este dispositivo/navegador no soporta NFC (usa Chrome en Android)'));
+    this._cancelarAnterior();
+    const controller = new AbortController();
+    this._controller = controller;
+    const reader = new NDEFReader();
+    return new Promise((resolve, reject)=>{
+      const onAbort = ()=>{ reject(new Error('Lectura NFC cancelada')); };
+      controller.signal.addEventListener('abort', onAbort, {once:true});
+      reader.addEventListener('reading', (event)=>{
+        try{
+          const record = event.message.records[0];
+          const decoder = new TextDecoder();
+          const text = decoder.decode(record.data);
+          if(this._controller===controller) this._controller = null;
+          resolve(text);
+        }catch(e){ reject(e); }
+      }, {once:true});
+      reader.addEventListener('readingerror', ()=>reject(new Error('No se pudo leer el tag NFC')), {once:true});
+      reader.scan({signal: controller.signal}).then(()=>{
+        if(onEsperando) onEsperando();
+      }).catch(reject);
+    });
+  },
+  // Escribe `codigo` en un tag/pulsera NFC en blanco. Cancela cualquier
+  // lectura/escritura anterior antes de empezar (esto es lo que evita el
+  // error "Push is cancelled due to a new push request").
+  async escribir(codigo){
+    if(!this.supported()) throw new Error('Este dispositivo/navegador no soporta escritura NFC (usa Chrome en Android)');
+    this._cancelarAnterior();
+    const controller = new AbortController();
+    this._controller = controller;
+    try{
+      const writer = new NDEFReader();
+      await writer.write({records:[{recordType:'text', data:String(codigo)}]}, {signal: controller.signal});
+    } finally {
+      if(this._controller===controller) this._controller = null;
+    }
+  },
+  // Cancela cualquier lectura/escritura en curso (llamar al salir de una
+  // pantalla que dejó un "acerca el tag" pendiente, para no dejar nada
+  // pegado que choque con la siguiente operación).
+  cancelar(){ this._cancelarAnterior(); },
+  // Variante "continua": llama a onReading(texto) cada vez que se acerca
+  // un tag, sin dejar de escuchar (para el lector de la entrada, que debe
+  // seguir validando pulseras una tras otra). Devuelve una función para
+  // cancelar manualmente si hace falta.
+  escanearContinuo(onReading, onEsperando){
+    if(!this.supported()){ toast('Este dispositivo/navegador no soporta NFC', true); return ()=>{}; }
+    this._cancelarAnterior();
+    const controller = new AbortController();
+    this._controller = controller;
+    const reader = new NDEFReader();
+    reader.addEventListener('reading', (event)=>{
+      try{
+        const record = event.message.records[0];
+        const decoder = new TextDecoder();
+        onReading(decoder.decode(record.data));
+      }catch(e){}
+    });
+    reader.scan({signal: controller.signal}).then(()=>{
+      if(onEsperando) onEsperando();
+    }).catch((e)=>{ toast('No se pudo iniciar NFC: '+(e.message||e), true); });
+    return ()=>{ if(this._controller===controller) this._cancelarAnterior(); };
+  }
+};
 /* Copia cualquier texto (por ejemplo el UUID del evento) al portapapeles.
    Usa la Clipboard API moderna y cae a un <textarea> temporal si el
    navegador/contexto no la permite (http sin TLS, permisos, etc). */
@@ -7342,6 +7437,11 @@ const QRApp = {
     document.querySelectorAll('#view-qr .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
     document.querySelectorAll('#view-qr .tab-pane').forEach(p=>p.classList.add('hide'));
     document.getElementById(name).classList.remove('hide');
+    // Si había una lectura NFC continua esperando un tag (pestaña
+    // "Escanear"), la cancelamos al salir — si no, queda "pegada" y
+    // choca con la siguiente operación de NFC en cualquier otra pestaña
+    // (por ejemplo "Push is cancelled due to a new push request").
+    if(name!=='q-scan') NfcKit.cancelar();
     if(name==='q-scan') this.renderScan();
     if(name==='q-hist') this.renderHist();
     if(name==='q-wallet') this.renderWallet();
@@ -7415,19 +7515,8 @@ const QRApp = {
   stopScanner(){
     if(this.scanner){ this.scanner.stop().then(()=>{ this.scanner.clear(); this.scanner=null; }).catch(()=>{}); }
   },
-  async scanNFC(){
-    if(!('NDEFReader' in window)){ toast('Este dispositivo/navegador no soporta NFC', true); return; }
-    try{
-      const reader = new NDEFReader();
-      await reader.scan();
-      toast('Acerca el celular a la entrada NFC…');
-      reader.onreading = (event)=>{
-        const record = event.message.records[0];
-        const decoder = new TextDecoder();
-        const text = decoder.decode(record.data);
-        this.handleCode(text);
-      };
-    }catch(e){ toast('No se pudo iniciar NFC: '+e.message, true); }
+  scanNFC(){
+    NfcKit.escanearContinuo((text)=>this.handleCode(text), ()=>toast('Acerca el celular a la entrada NFC…'));
   },
   // Guarda cada intento de lectura (válida o fallida) para el consolidado de
   // estadísticas del admin. Nunca interrumpe el flujo del escáner si falla.
@@ -7677,7 +7766,38 @@ const VTApp = {
         <div class="field"><label>Correo</label><input id="vVtaCorreo" type="email"></div>
         <div class="field"><label>Teléfono</label><input id="vVtaTelefono"></div>
         <button class="btn btn-primary btn-block btn-lg" onclick="VTApp.registrarCliente()">Continuar</button>
+        <div style="border-top:1px solid var(--border,#333); margin-top:16px; padding-top:14px;">
+          <button class="btn btn-block ${NfcKit.supported()?'':'btn-ghost'}" type="button" onclick="VTApp.leerTicketNFC()">🔍 Leer pulsera/tag NFC (ver a qué ticket está vinculada)</button>
+          ${!NfcKit.supported() ? '<p class="hint" style="margin-top:6px;">NFC solo disponible en Chrome para Android. Usa esto para revisar, antes de vender o reutilizar una pulsera, qué ticket tiene grabado.</p>' : ''}
+          <div id="vVtaNfcResultado" style="margin-top:10px;"></div>
+        </div>
       </div>`;
+  },
+  // Lee una pulsera/tag NFC (sin escribir nada) y muestra qué ticket tiene
+  // grabado — para que el vendedor pueda revisar una pulsera antes de
+  // reutilizarla o de vincularla, sin tener que ir a "Mis ventas".
+  leerTicketNFC(){
+    if(!NfcKit.supported()){ toast('Este dispositivo/navegador no soporta NFC (usa Chrome en Android)', true); return; }
+    const resBox = document.getElementById('vVtaNfcResultado');
+    if(resBox) resBox.innerHTML = `<p class="hint">Acerca la pulsera/tag NFC…</p>`;
+    NfcKit.leerUnaVez(()=>toast('Acerca la pulsera/tag NFC…')).then(async (text)=>{
+      let codigo = text;
+      try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
+      const {data} = await sb.from('tickets').select('*').eq('codigo', codigo).limit(1);
+      const ticket = data && data[0];
+      if(!resBox) return;
+      if(!ticket){
+        resBox.innerHTML = `<div class="stat" style="border-color:var(--red,#a33);"><b>Código leído: ${escapeHtml(codigo)}</b><br><span class="hint">No corresponde a ningún ticket registrado — pulsera en blanco o de otro sistema.</span></div>`;
+        return;
+      }
+      resBox.innerHTML = `<div class="stat">
+        <b>${escapeHtml(ticket.nombre_cliente||'(sin nombre)')}</b> · ${escapeHtml(ticket.categoria||'')}<br>
+        <span class="hint">Código: <span class="mono">${escapeHtml(ticket.codigo)}</span> · ${money(ticket.precio)} · ${escapeHtml(ticket.tipo_pago||'')}</span><br>
+        <span class="hint">${ticket.estado==='anulado' ? '🚫 Ticket anulado' : (ticket.escaneado ? `✅ Ya fue escaneado en la entrada (${fmtTime(ticket.escaneado_hora)}${ticket.escaneado_por?' · '+escapeHtml(ticket.escaneado_por):''})` : '⏳ Aún no ha sido escaneado en la entrada')}</span>
+      </div>`;
+    }).catch((e)=>{
+      if(resBox) resBox.innerHTML = `<p class="hint" style="color:var(--red,#e66);">No se pudo leer: ${escapeHtml(e.message||String(e))}</p>`;
+    });
   },
   registrarCliente(){
     const nombre = document.getElementById('vVtaNombre').value.trim();
@@ -8451,12 +8571,14 @@ const WalletKit = {
   // Escribe el código del ticket en un tag/pulsera NFC en blanco, para que
   // luego pueda validarse en la puerta también acercando la pulsera (no
   // solo con el QR). Lo usa el vendedor justo después de vender el ticket.
+  // Usa NfcKit (ver definición arriba) para que esto cancele automáticamente
+  // cualquier lectura NFC que haya quedado pendiente en otra pestaña — es lo
+  // que evita el error "Push is cancelled due to a new push request".
   async escribirNFC(codigo){
-    if(!('NDEFReader' in window)){ toast('Este dispositivo/navegador no soporta escritura NFC (usa Chrome en Android)', true); return false; }
+    if(!NfcKit.supported()){ toast('Este dispositivo/navegador no soporta escritura NFC (usa Chrome en Android)', true); return false; }
     try{
-      const writer = new NDEFReader();
       toast('Acerca el tag/pulsera NFC en blanco para vincularlo…');
-      await writer.write({records:[{recordType:'text', data: String(codigo)}]});
+      await NfcKit.escribir(codigo);
       toast('¡Pulsera NFC vinculada! Ya puede usarse para validar la entrada.');
       return true;
     }catch(e){
@@ -8467,33 +8589,42 @@ const WalletKit = {
   async staffScanQR(){
     const box = document.getElementById('walletStaffScanBox');
     if(!box) return;
-    box.innerHTML = `<div id="walletQrReader" style="max-width:280px;margin:0 auto;"></div>`;
-    await loadHtml5QrcodeLib();
-    const scanner = new Html5Qrcode('walletQrReader');
-    this._walletScanner = scanner;
-    scanner.start({facingMode:'environment'}, {fps:10, qrbox:220}, (text)=>{
-      scanner.stop().then(()=>scanner.clear()).catch(()=>{});
-      box.innerHTML='';
-      let codigo = text;
-      try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
-      this.staffBuscarPorCodigo(codigo);
-    }, ()=>{}).catch(()=>toast('No se pudo acceder a la cámara', true));
-  },
-  async staffScanNFC(){
-    if(!('NDEFReader' in window)){ toast('Este dispositivo/navegador no soporta NFC', true); return; }
+    // Si había un escaneo anterior corriendo (por ejemplo el vendedor tocó
+    // el botón dos veces mientras el celular todavía pedía permiso de
+    // cámara), lo detenemos antes de crear uno nuevo — si no, html5-qrcode
+    // lanza un error interno ("another scan is ongoing") y la cámara nunca
+    // llega a abrirse.
+    if(this._walletScanner){
+      try{ await this._walletScanner.stop(); this._walletScanner.clear(); }catch(e){}
+      this._walletScanner = null;
+    }
+    // Alto explícito: sin esto, en algunos navegadores/WebView el contenedor
+    // queda con altura 0 (solo tiene max-width) y la cámara "abre" pero no
+    // se ve nada.
+    box.innerHTML = `<div id="walletQrReader" style="max-width:280px; min-height:280px; margin:0 auto;"></div>`;
     try{
-      const reader = new NDEFReader();
-      await reader.scan();
-      toast('Acerca la pulsera/tarjeta NFC del cliente…');
-      reader.onreading = (event)=>{
-        const record = event.message.records[0];
-        const decoder = new TextDecoder();
-        const text = decoder.decode(record.data);
+      await loadHtml5QrcodeLib();
+      const scanner = new Html5Qrcode('walletQrReader');
+      this._walletScanner = scanner;
+      await scanner.start({facingMode:'environment'}, {fps:10, qrbox:220}, (text)=>{
+        scanner.stop().then(()=>scanner.clear()).catch(()=>{});
+        this._walletScanner = null;
+        box.innerHTML='';
         let codigo = text;
         try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
         this.staffBuscarPorCodigo(codigo);
-      };
-    }catch(e){ toast('No se pudo iniciar NFC: '+(e.message||e), true); }
+      }, ()=>{});
+    }catch(e){
+      this._walletScanner = null;
+      toast('No se pudo acceder a la cámara: '+(e.message||e), true);
+    }
+  },
+  staffScanNFC(){
+    NfcKit.leerUnaVez(()=>toast('Acerca la pulsera/tarjeta NFC del cliente…')).then((text)=>{
+      let codigo = text;
+      try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
+      this.staffBuscarPorCodigo(codigo);
+    }).catch((e)=>{ toast('No se pudo leer el NFC: '+(e.message||e), true); });
   },
   async staffBuscarPorCodigo(codigo){
     const {data} = await sb.from('tickets').select('*').eq('codigo', codigo).limit(1);
