@@ -1190,6 +1190,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="pill-tab" data-tab="a-compras" onclick="AdminApp.tab('a-compras')">Solicitudes de compra</div>
         <div class="pill-tab" data-tab="a-recibos" onclick="AdminApp.tab('a-recibos')">Recibos de pago</div>
         <div class="pill-tab" data-tab="a-wallets" onclick="AdminApp.tab('a-wallets')">💳 Wallets</div>
+        <div class="pill-tab" data-tab="a-clientes" onclick="AdminApp.tab('a-clientes')">Usuarios</div>
         <div class="pill-tab" data-tab="a-chat" onclick="AdminApp.tab('a-chat')">Chat</div>
         <div class="pill-tab" data-tab="a-ajustes" onclick="AdminApp.tab('a-ajustes')">Fondo de video</div>
       </div>
@@ -1208,6 +1209,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
       <div id="a-compras" class="tab-pane hide"></div>
       <div id="a-recibos" class="tab-pane hide"></div>
       <div id="a-wallets" class="tab-pane hide"></div>
+      <div id="a-clientes" class="tab-pane hide"></div>
       <div id="a-chat" class="tab-pane hide"></div>
       <div id="a-ajustes" class="tab-pane hide"></div>
     </section>
@@ -2545,6 +2547,12 @@ const ClienteAuth = {
     this.renderEventContext();
     const loginEmail=document.getElementById('clientEmail')?.value?.trim()||'';
     const regEmail=document.getElementById('clientRegisterEmail'); if(regEmail&&loginEmail) regEmail.value=loginEmail;
+    // El botón de verificación automática con Didit solo tiene sentido
+    // mostrarlo si el evento seleccionado la tiene activada (ver
+    // AdminApp.configurarDidit); si no, se oculta y el registro queda
+    // como un formulario normal, sin pedir cédula/rostro.
+    const kycBox=document.getElementById('clientKycBox');
+    if(kycBox) kycBox.classList.toggle('hide', !(this.pendingEvento && this.pendingEvento.didit_habilitado));
     Router.go('login-cliente-register'); setTimeout(()=>document.getElementById('clientRegisterName')?.focus(),40);
   },
   clearKycStatus(){ DiditKYC._setStatusMsg(''); },
@@ -2553,7 +2561,11 @@ const ClienteAuth = {
   // directo a la compra, se manda al gate de verificación. El campo
   // kyc_verificado lo debe devolver el RPC validar_cliente (o el select de
   // abajo si no lo trae) — ver migración SQL de marcar_cliente_verificado.
-  needsKycGate(customer){
+  // La verificación solo se exige si el evento la tiene activada
+  // (evento.didit_habilitado, botón "🪪 Didit" en la tarjeta del evento del
+  // admin): si el evento no la exige, se salta el gate por completo.
+  needsKycGate(customer, evento){
+    if(!evento || !evento.didit_habilitado) return false;
     return !customer || !customer.kyc_verificado;
   },
   showKycGate(customer, evento){
@@ -2628,8 +2640,9 @@ const ClienteAuth = {
       if(!customer){toast('Correo o contraseña incorrectos.',true);return;}
       this.pendingCustomer=customer;
       // Cuenta nueva o que aún no completó el KYC de Didit: se exige
-      // verificar identidad antes de continuar (ver DiditKYC.startForLogin).
-      if(this.needsKycGate(customer)){
+      // verificar identidad antes de continuar (ver DiditKYC.startForLogin),
+      // pero solo si el evento tiene la verificación activada.
+      if(this.needsKycGate(customer, evento)){
         this.showKycGate(customer, evento);
         return;
       }
@@ -2732,8 +2745,9 @@ const ClienteAuth = {
     this.pendingRecoveryCode=null;
     // Cuenta recién creada: si no quedó verificada durante el registro
     // (p. ej. porque llenó los datos a mano en vez de usar Didit), se
-    // exige el KYC antes de dejarla continuar, igual que en login().
-    if(this.needsKycGate(customer)){
+    // exige el KYC antes de dejarla continuar, igual que en login() — y,
+    // al igual que allí, solo si el evento tiene la verificación activada.
+    if(this.needsKycGate(customer, evento)){
       this.showKycGate(customer, evento);
       return;
     }
@@ -4977,6 +4991,7 @@ const AdminApp = {
     if(name==='a-eventos') this.renderEventos();
     if(name==='a-tickets') this.renderTickets();
     if(name==='a-usuarios') this.renderUsuarios();
+    if(name==='a-clientes') AdminClientes.render();
     if(name==='a-stats'){
       // La pestaña de Estadísticas depende de this.tickets (ventas por
       // vendedor, tipo de pago, total recaudado). Ese arreglo solo se
@@ -5432,6 +5447,7 @@ const AdminApp = {
           <button class="btn btn-sm" onclick="AdminApp.openAjustarMapa('${e.id}')">Ajustar palcos/VIP</button>
           <button class="btn btn-sm" onclick="AdminApp.configurarPago('${e.id}')">Config. de pago</button>
           <button class="btn btn-sm ${e.wallet_habilitada?'wallet-badge-enabled':''}" onclick="AdminApp.configurarWallet('${e.id}')">💳 Wallet${e.wallet_habilitada?' (activa)':''}</button>
+          <button class="btn btn-sm ${e.didit_habilitado?'wallet-badge-enabled':''}" onclick="AdminApp.configurarDidit('${e.id}')">🪪 Didit${e.didit_habilitado?' (activa)':''}</button>
           <button class="btn btn-sm" onclick="AdminApp.exportarEvento('${e.id}')">⬇️ Exportar</button>
           <button class="btn btn-sm" onclick="AdminApp.limpiarFantasmas('${e.id}')">🧹 Limpiar ubicaciones fantasma</button>
         </div>
@@ -6104,6 +6120,37 @@ const AdminApp = {
     toast('Configuración de wallet guardada');
     this.renderEventos();
   },
+
+  /* ---------- DIDIT KYC: habilitar/deshabilitar verificación por evento ---------- */
+  configurarDidit(eventId){
+    const e = this.eventos.find(x=>x.id===eventId);
+    if(!e) return;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="diditCfgModal">
+        <div class="modal">
+          <div class="section-title"><h2 style="font-size:19px;">🪪 Verificación Didit · ${escapeHtml(e.nombre)}</h2></div>
+          <label class="chk" style="margin:10px 0;"><input type="checkbox" id="diditCfgHabilitada" ${e.didit_habilitado?'checked':''}> Exigir verificación de identidad (cédula + rostro) para este evento</label>
+          <p class="hint" style="margin-top:-4px;">Cuando está activa, los clientes deben verificar su cédula y rostro con Didit al iniciar sesión o registrarse para comprar/ver su wallet en este evento. Si la desactivas, el registro y el login funcionan directo, sin pedir verificación.</p>
+          <div class="row" style="margin-top:14px;">
+            <button class="btn btn-ghost" onclick="document.getElementById('diditCfgModal').remove()">Cancelar</button>
+            <button class="btn btn-primary" onclick="AdminApp.guardarDidit('${eventId}')">Guardar</button>
+          </div>
+        </div>
+      </div>`);
+  },
+  async guardarDidit(eventId){
+    const e = this.eventos.find(x=>x.id===eventId);
+    if(!e) return;
+    const didit_habilitado = document.getElementById('diditCfgHabilitada').checked;
+    const {error} = await sb.from('eventos').update({didit_habilitado}).eq('id', eventId);
+    if(error){ toast('No se pudo guardar: '+error.message, true); return; }
+    e.didit_habilitado = didit_habilitado;
+    if(this.evento && this.evento.id===eventId){ this.evento.didit_habilitado = didit_habilitado; }
+    document.getElementById('diditCfgModal')?.remove();
+    toast('Configuración de verificación Didit guardada');
+    this.renderEventos();
+  },
+
   /* ---------- WALLET: panel del admin con la wallet de cada cliente ---------- */
   async renderWallets(){
     const box = document.getElementById('a-wallets');
@@ -6809,6 +6856,146 @@ const AdminApp = {
     const input = document.getElementById('adminChatInput');
     ChatKit.send(this.currentRoom, 'Admin', 'admin', input.value);
     input.value='';
+  }
+};
+
+/* =========================================================
+   ADMIN · USUARIOS (cuentas de cliente correo/contraseña + Didit)
+   -------------------------------------------------------
+   Lista las cuentas de la tabla "clientes" (registro con correo y
+   contraseña, verificación Didit opcional u obligatoria según el
+   evento — ver schema_kyc_clientes.sql). Como esa tabla no tiene
+   políticas RLS abiertas para anon (para no exponer las contraseñas a
+   cualquiera que llame a la tabla directo), la lista se trae con el RPC
+   admin_listar_clientes. Al hacer clic en un usuario se cruzan sus datos
+   por correo/cédula con wallets, wallet_movimientos y tickets (esas sí
+   con RLS abierta, igual que el resto de la app) para mostrar saldos,
+   cobros/recargas de wallet y tickets comprados.
+========================================================= */
+const AdminClientes = {
+  _cache: [],
+  async render(){
+    const box = document.getElementById('a-clientes');
+    if(!box) return;
+    box.innerHTML = `<div class="hint" style="padding:20px;">Cargando usuarios…</div>`;
+    let clientes = [];
+    try{
+      const {data, error} = await sb.rpc('admin_listar_clientes');
+      if(error) throw error;
+      clientes = data || [];
+    }catch(err){
+      box.innerHTML = `<div class="card"><p class="hint">No se pudo cargar la lista de usuarios: ${escapeHtml(err.message||String(err))}.<br>¿Ya ejecutaste <code>schema_kyc_clientes.sql</code> en el SQL Editor de Supabase?</p></div>`;
+      return;
+    }
+    this._cache = clientes;
+    box.innerHTML = `
+      <div class="card" style="margin-bottom:14px;">
+        <div class="row" style="justify-content:space-between; align-items:center; flex-wrap:wrap;">
+          <div class="section-title" style="margin:0;"><h2 style="font-size:16px;">Usuarios registrados (${clientes.length})</h2></div>
+          <input id="acBuscar" placeholder="Buscar por nombre, correo o cédula…" style="max-width:280px;" oninput="AdminClientes.filtrar()">
+        </div>
+        <p class="hint" style="margin-top:6px;">Cuentas creadas desde "Crear cuenta de cliente" (correo + contraseña). Haz clic en un usuario para ver sus datos de registro, saldos, cobros de wallet, contraseña y tickets.</p>
+      </div>
+      <div id="acLista">${this.listaHtml(clientes)}</div>`;
+  },
+  listaHtml(clientes){
+    if(!clientes.length) return `<div class="card"><p class="hint">Todavía no hay usuarios registrados.</p></div>`;
+    return `<div class="card"><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Cédula</th><th>Teléfono</th><th>Verificado</th><th>Creado</th></tr></thead><tbody>
+      ${clientes.map(c=>`<tr style="cursor:pointer;" onclick="AdminClientes.verDetalle('${c.id}')">
+        <td>${escapeHtml(c.nombre_completo||'(sin nombre)')}</td>
+        <td>${escapeHtml(c.correo||'')}</td>
+        <td>${escapeHtml(c.cedula||'—')}</td>
+        <td>${escapeHtml(c.telefono||'—')}</td>
+        <td>${c.kyc_verificado?'✅ Sí':'— No'}</td>
+        <td>${fmtTime(c.created_at)}</td>
+      </tr>`).join('')}
+    </tbody></table></div></div>`;
+  },
+  filtrar(){
+    const q=(document.getElementById('acBuscar').value||'').trim().toLowerCase();
+    const filtrados=(this._cache||[]).filter(c=>!q || (c.nombre_completo||'').toLowerCase().includes(q) || (c.correo||'').toLowerCase().includes(q) || (c.cedula||'').toLowerCase().includes(q));
+    document.getElementById('acLista').innerHTML=this.listaHtml(filtrados);
+  },
+  async verDetalle(clienteId){
+    const c=(this._cache||[]).find(x=>x.id===clienteId);
+    if(!c) return;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="acDetalleModal">
+        <div class="modal" style="max-width:700px;">
+          <div class="section-title"><h2 style="font-size:18px;">${escapeHtml(c.nombre_completo||'Usuario')}</h2></div>
+          <div id="acDetalleBody"><div class="hint" style="padding:14px;">Cargando saldos, cobros y tickets…</div></div>
+          <button class="btn btn-block" style="margin-top:12px;" onclick="document.getElementById('acDetalleModal').remove()">Cerrar</button>
+        </div>
+      </div>`);
+    const body = document.getElementById('acDetalleBody');
+
+    let wallets = [], movs = [], tickets = [];
+    try{
+      let wQuery = sb.from('wallets').select('*, eventos(nombre)');
+      wQuery = c.correo ? wQuery.eq('correo', c.correo) : wQuery.eq('cedula', c.cedula||'');
+      let tQuery = sb.from('tickets').select('*').order('created_at',{ascending:false});
+      if(c.correo && c.cedula) tQuery = tQuery.or(`correo.eq.${c.correo},cedula.eq.${c.cedula}`);
+      else if(c.correo) tQuery = tQuery.eq('correo', c.correo);
+      else if(c.cedula) tQuery = tQuery.eq('cedula', c.cedula);
+      const [wRes, tRes] = await Promise.all([wQuery, tQuery]);
+      wallets = wRes.data || [];
+      tickets = tRes.data || [];
+      const walletIds = wallets.map(w=>w.id);
+      if(walletIds.length){
+        const {data:movData} = await sb.from('wallet_movimientos').select('*').in('wallet_id', walletIds).order('created_at',{ascending:false}).limit(150);
+        movs = movData || [];
+      }
+    }catch(e){ /* se muestra lo que se haya podido cargar */ }
+
+    const totalSaldo = wallets.reduce((a,w)=>a+Number(w.saldo||0),0);
+    body.innerHTML = `
+      <div class="section-title"><h3 style="font-size:14px;">Datos de registro</h3></div>
+      <div class="table-wrap"><table><tbody>
+        <tr><td class="hint">Nombre</td><td>${escapeHtml(c.nombre_completo||'—')}</td></tr>
+        <tr><td class="hint">Correo</td><td>${escapeHtml(c.correo||'—')}</td></tr>
+        <tr><td class="hint">Cédula</td><td>${escapeHtml(c.cedula||'—')}</td></tr>
+        <tr><td class="hint">Teléfono</td><td>${escapeHtml(c.telefono||'—')}</td></tr>
+        <tr><td class="hint">Contraseña</td><td>
+          <span id="acPassMasked-${c.id}">••••••••</span>
+          <span id="acPassReal-${c.id}" class="hide mono">${escapeHtml(c.password||'')}</span>
+          <button class="btn btn-sm" type="button" onclick="AdminClientes.togglePassword('${c.id}', this)">👁 Ver</button>
+        </td></tr>
+        <tr><td class="hint">Verificado (Didit)</td><td>${c.kyc_verificado?'✅ Sí'+(c.kyc_verificado_en?(' · '+fmtTime(c.kyc_verificado_en)):''):'— No'}</td></tr>
+        <tr><td class="hint">Código de recuperación</td><td class="mono">${escapeHtml(c.recovery_code||'—')}</td></tr>
+        <tr><td class="hint">Cuenta creada</td><td>${fmtTime(c.created_at)}</td></tr>
+      </tbody></table></div>
+
+      <div class="section-title" style="margin-top:16px;"><h3 style="font-size:14px;">Saldos de wallet (${wallets.length} evento${wallets.length===1?'':'s'} · total ${money(totalSaldo)})</h3></div>
+      ${!wallets.length ? `<p class="hint">Este usuario no tiene wallet en ningún evento todavía.</p>` : `
+      <div class="table-wrap"><table><thead><tr><th>Evento</th><th>Saldo</th></tr></thead><tbody>
+        ${wallets.map(w=>`<tr><td>${escapeHtml((w.eventos&&w.eventos.nombre)||'—')}</td><td class="${Number(w.saldo)<0?'wallet-amount-neg':'wallet-amount-pos'}">${money(w.saldo)}</td></tr>`).join('')}
+      </tbody></table></div>`}
+
+      <div class="section-title" style="margin-top:16px;"><h3 style="font-size:14px;">Cobros y recargas de wallet (${movs.length})</h3></div>
+      ${WalletKit.historialHtml(movs, {admin:true})}
+
+      <div class="section-title" style="margin-top:16px;"><h3 style="font-size:14px;">Tickets (${tickets.length})</h3></div>
+      ${!tickets.length ? `<p class="hint">Este usuario no tiene tickets comprados.</p>` : `
+      <div class="table-wrap"><table><thead><tr><th>Código</th><th>Categoría</th><th>Ubicación</th><th>Pago</th><th>Estado</th><th>Fecha</th></tr></thead><tbody>
+        ${tickets.map(t=>`<tr>
+          <td class="mono">${escapeHtml(t.codigo||'')}</td>
+          <td>${escapeHtml(t.categoria||'')}</td>
+          <td>${escapeHtml(t.ubicacion_detalle||t.ubicacion_tipo||'—')}</td>
+          <td>${escapeHtml(t.tipo_pago||'—')}</td>
+          <td>${t.escaneado?'✓ Escaneado':(t.estado||'—')}</td>
+          <td>${fmtTime(t.created_at)}</td>
+        </tr>`).join('')}
+      </tbody></table></div>`}
+    `;
+  },
+  togglePassword(clienteId, btn){
+    const masked = document.getElementById('acPassMasked-'+clienteId);
+    const real = document.getElementById('acPassReal-'+clienteId);
+    if(!masked || !real) return;
+    const showing = !real.classList.contains('hide');
+    real.classList.toggle('hide', showing);
+    masked.classList.toggle('hide', !showing);
+    if(btn) btn.textContent = showing ? '👁 Ver' : '🙈 Ocultar';
   }
 };
 
