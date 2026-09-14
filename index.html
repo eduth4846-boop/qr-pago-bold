@@ -1468,18 +1468,27 @@ function money(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
 const NfcKit = {
   supported(){ return 'NDEFReader' in window; },
   _controller: null,
+  // Cancela la operación NFC anterior (si había una) y devuelve una
+  // promesa que se resuelve apenas es seguro empezar la siguiente. En
+  // Chrome/Android, abortar un scan()/write() y arrancar el próximo en el
+  // mismo instante puede hacer que ESE SIGUIENTE reciba "signal is
+  // aborted without reason" porque el radio NFC del sistema todavía no
+  // terminó de liberarse — por eso, cuando sí había algo que cancelar, se
+  // espera un respiro breve antes de continuar.
   _cancelarAnterior(){
     if(this._controller){
       try{ this._controller.abort(); }catch(e){}
       this._controller = null;
+      return new Promise(r=>setTimeout(r, 250));
     }
+    return Promise.resolve();
   },
   // Lee el próximo tag/pulsera que se acerque y devuelve su texto (una
   // sola lectura). onEsperando() se llama apenas el lector queda listo,
   // para poder avisar "acerca el tag" en la UI.
-  leerUnaVez(onEsperando){
+  async leerUnaVez(onEsperando){
     if(!this.supported()) return Promise.reject(new Error('Este dispositivo/navegador no soporta NFC (usa Chrome en Android)'));
-    this._cancelarAnterior();
+    await this._cancelarAnterior();
     const controller = new AbortController();
     this._controller = controller;
     const reader = new NDEFReader();
@@ -1503,10 +1512,11 @@ const NfcKit = {
   },
   // Escribe `codigo` en un tag/pulsera NFC en blanco. Cancela cualquier
   // lectura/escritura anterior antes de empezar (esto es lo que evita el
-  // error "Push is cancelled due to a new push request").
+  // error "Push is cancelled due to a new push request") y espera el
+  // respiro de _cancelarAnterior() antes de abrir el nuevo NDEFReader.
   async escribir(codigo){
     if(!this.supported()) throw new Error('Este dispositivo/navegador no soporta escritura NFC (usa Chrome en Android)');
-    this._cancelarAnterior();
+    await this._cancelarAnterior();
     const controller = new AbortController();
     this._controller = controller;
     try{
@@ -1524,9 +1534,9 @@ const NfcKit = {
   // un tag, sin dejar de escuchar (para el lector de la entrada, que debe
   // seguir validando pulseras una tras otra). Devuelve una función para
   // cancelar manualmente si hace falta.
-  escanearContinuo(onReading, onEsperando){
+  async escanearContinuo(onReading, onEsperando){
     if(!this.supported()){ toast('Este dispositivo/navegador no soporta NFC', true); return ()=>{}; }
-    this._cancelarAnterior();
+    await this._cancelarAnterior();
     const controller = new AbortController();
     this._controller = controller;
     const reader = new NDEFReader();
@@ -7551,11 +7561,14 @@ const QRApp = {
     document.querySelectorAll('#view-qr .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
     document.querySelectorAll('#view-qr .tab-pane').forEach(p=>p.classList.add('hide'));
     document.getElementById(name).classList.remove('hide');
-    // Si había una lectura NFC continua esperando un tag (pestaña
-    // "Escanear"), la cancelamos al salir — si no, queda "pegada" y
-    // choca con la siguiente operación de NFC en cualquier otra pestaña
-    // (por ejemplo "Push is cancelled due to a new push request").
-    if(name!=='q-scan') NfcKit.cancelar();
+    // Si había una lectura/escritura NFC pendiente (por ejemplo "Escanear
+    // NFC" en la entrada, o "Leer NFC" en la pestaña Wallet, esperando un
+    // tag), la cancelamos SIEMPRE al cambiar de pestaña — si no, queda
+    // "pegada" y choca con la siguiente operación de NFC en cualquier
+    // otra pestaña (por ejemplo "signal is aborted without reason" o
+    // "Push is cancelled due to a new push request"). No hay pérdida:
+    // ningún tab arranca NFC automáticamente, siempre es con un botón.
+    NfcKit.cancelar();
     if(name==='q-scan') this.renderScan();
     if(name==='q-hist') this.renderHist();
     if(name==='q-wallet') this.renderWallet();
@@ -7740,6 +7753,15 @@ const VTApp = {
     document.querySelectorAll('#view-vt .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
     document.querySelectorAll('#view-vt .tab-pane').forEach(p=>p.classList.add('hide'));
     document.getElementById(name).classList.remove('hide');
+    // Igual que en QRApp.tab(): si había una lectura/escritura NFC
+    // pendiente en la pestaña que se deja (por ejemplo "Leer NFC" en
+    // "Recargar saldo", esperando que acerquen la pulsera), se cancela
+    // SIEMPRE al cambiar de pestaña. Sin esto, si el vendedor entra a
+    // "Recargar saldo", toca "Leer NFC" y sin acercar nada cambia a "Mis
+    // ventas" para tocar "Vincular NFC", esa lectura vieja sigue viva y
+    // el navegador responde "signal is aborted without reason" en la
+    // escritura nueva (el radio NFC del sistema no alcanzó a liberarse).
+    NfcKit.cancelar();
     if(name==='v-vender') this.renderVender();
     if(name==='v-mis') this.renderMis();
     if(name==='v-wallet') this.renderWallet();
@@ -8658,7 +8680,24 @@ const WalletKit = {
   },
 
   /* ---------- recarga hecha por staff (VT/QR) tras escanear QR/NFC ---------- */
+  // Este panel se renderiza (con el mismo HTML) dentro de 3 pestañas
+  // distintas a la vez — Admin ("a-wallets-scan"), Validador ("q-wallet")
+  // y Vendedor ("v-wallet") — cada una re-renderiza su propia copia con
+  // `box.innerHTML = await panelStaffHtml()` cuando el usuario abre esa
+  // pestaña. Si en la MISMA sesión de navegador (sin recargar la página)
+  // se llegaron a visitar dos o más de esas pestañas, quedan varias copias
+  // del mismo HTML en el DOM al mismo tiempo, todas ocultas menos la
+  // activa. Antes, esos elementos tenían ids fijos (`walletStaffScanBox`,
+  // `walletQrReader`, etc.) e `Html5Qrcode`/`document.getElementById`
+  // siempre agarran el PRIMERO que aparece en el documento, sin importar
+  // cuál está visible — así, la cámara podía terminar "abriendo" dentro
+  // de una copia oculta de otra pestaña, y en pantalla no se veía nada.
+  // Por eso cada id lleva un sufijo según el rol (`_sfx()`), para que cada
+  // pestaña tenga siempre sus propios elementos, sin cruzarse con las
+  // otras dos.
+  _sfx(){ return this._staffCtx().tipo || 'x'; },
   async panelStaffHtml(){
+    const sfx = this._sfx();
     return `
       <div class="card" style="max-width:520px; margin:0 auto;">
         <div class="section-title"><h2 style="font-size:19px;">Recargar saldo</h2></div>
@@ -8667,10 +8706,10 @@ const WalletKit = {
           <button class="btn" onclick="WalletKit.staffScanQR()">📷 Escanear QR</button>
           <button class="btn ${('NDEFReader' in window)?'':'btn-ghost'}" onclick="WalletKit.staffScanNFC()">📶 Leer NFC</button>
         </div>
-        <div id="walletStaffScanBox"></div>
-        <div class="field"><label>Correo o cédula del cliente</label><input id="walletStaffBuscar" placeholder="correo@ejemplo.com o cédula" onkeydown="if(event.key==='Enter')WalletKit.staffBuscar()"></div>
+        <div id="walletStaffScanBox-${sfx}"></div>
+        <div class="field"><label>Correo o cédula del cliente</label><input id="walletStaffBuscar-${sfx}" placeholder="correo@ejemplo.com o cédula" onkeydown="if(event.key==='Enter')WalletKit.staffBuscar()"></div>
         <button class="btn btn-block" onclick="WalletKit.staffBuscar()">Buscar cliente</button>
-        <div id="walletStaffResultado" style="margin-top:16px;"></div>
+        <div id="walletStaffResultado-${sfx}" style="margin-top:16px;"></div>
       </div>`;
   },
   _staffCtx(){
@@ -8701,7 +8740,8 @@ const WalletKit = {
     }
   },
   async staffScanQR(){
-    const box = document.getElementById('walletStaffScanBox');
+    const sfx = this._sfx();
+    const box = document.getElementById('walletStaffScanBox-'+sfx);
     if(!box) return;
     // Si había un escaneo anterior corriendo (por ejemplo el vendedor tocó
     // el botón dos veces mientras el celular todavía pedía permiso de
@@ -8714,11 +8754,14 @@ const WalletKit = {
     }
     // Alto explícito: sin esto, en algunos navegadores/WebView el contenedor
     // queda con altura 0 (solo tiene max-width) y la cámara "abre" pero no
-    // se ve nada.
-    box.innerHTML = `<div id="walletQrReader" style="max-width:280px; min-height:280px; margin:0 auto;"></div>`;
+    // se ve nada. El id lleva el sufijo del rol (ver panelStaffHtml) para
+    // que Html5Qrcode enganche SIEMPRE el contenedor visible de esta
+    // pestaña, aunque haya otras copias ocultas en el DOM de otras pestañas.
+    const readerId = 'walletQrReader-'+sfx;
+    box.innerHTML = `<div id="${readerId}" style="max-width:280px; min-height:280px; margin:0 auto;"></div>`;
     try{
       await loadHtml5QrcodeLib();
-      const scanner = new Html5Qrcode('walletQrReader');
+      const scanner = new Html5Qrcode(readerId);
       this._walletScanner = scanner;
       await scanner.start({facingMode:'environment'}, {fps:10, qrbox:220}, (text)=>{
         scanner.stop().then(()=>scanner.clear()).catch(()=>{});
@@ -8749,7 +8792,7 @@ const WalletKit = {
   async staffBuscar(){
     const ctx = this._staffCtx();
     const evento = ctx.app && ctx.app.evento;
-    const valor = document.getElementById('walletStaffBuscar').value.trim();
+    const valor = document.getElementById('walletStaffBuscar-'+this._sfx()).value.trim();
     if(!valor){ toast('Escribe el correo o la cédula del cliente', true); return; }
     if(!evento){ toast('Selecciona primero el evento', true); return; }
     const {data} = await sb.from('tickets').select('*').eq('evento_id', evento.id).or(`correo.eq.${valor},cedula.eq.${valor}`).limit(1);
@@ -8758,7 +8801,8 @@ const WalletKit = {
     await this.staffMostrarCliente(evento.id, {correo:ticket.correo, cedula:ticket.cedula, nombre:ticket.nombre_cliente, telefono:ticket.telefono});
   },
   async staffMostrarCliente(eventoId, cliente){
-    const box = document.getElementById('walletStaffResultado');
+    const sfx = this._sfx();
+    const box = document.getElementById('walletStaffResultado-'+sfx);
     if(!box) return;
     const evento = await this.eventoWallet(eventoId);
     if(!evento || !evento.wallet_habilitada){ box.innerHTML = `<div class="card"><p class="hint">Este evento no tiene la wallet habilitada.</p></div>`; return; }
@@ -8767,8 +8811,8 @@ const WalletKit = {
     box.innerHTML = `
       <div style="max-width:420px; margin:0 auto 16px;">${this.cardHtml(wallet, evento, cliente)}</div>
       <div class="card" style="max-width:420px; margin:0 auto;">
-        <div class="field"><label>Monto (COP)</label><input id="walletStaffMonto" type="number" min="1000" step="1000" placeholder="ej: 20000"></div>
-        <div class="field"><label>Método</label><select id="walletStaffMetodo"><option value="efectivo">Efectivo</option><option value="nfc">Datafono / tarjeta (NFC)</option></select></div>
+        <div class="field"><label>Monto (COP)</label><input id="walletStaffMonto-${sfx}" type="number" min="1000" step="1000" placeholder="ej: 20000"></div>
+        <div class="field"><label>Método</label><select id="walletStaffMetodo-${sfx}"><option value="efectivo">Efectivo</option><option value="nfc">Datafono / tarjeta (NFC)</option></select></div>
         <div class="row" style="gap:8px;">
           <button class="btn btn-primary" style="flex:1;" onclick="WalletKit.staffConfirmarMovimiento('recarga')">➕ Recargar</button>
           <button class="btn btn-danger" style="flex:1;" onclick="WalletKit.staffConfirmarMovimiento('consumo')">➖ Cobrar</button>
@@ -8820,10 +8864,11 @@ const WalletKit = {
   // una compra en barra/tienda pagada con la wallet del cliente).
   async staffConfirmarMovimiento(tipo){
     const ctx = this._staffCtx();
+    const sfx = this._sfx();
     const cliente = this._staffCliente;
     if(!cliente){ toast('Busca primero al cliente', true); return; }
-    const monto = Number(document.getElementById('walletStaffMonto').value);
-    const metodo = document.getElementById('walletStaffMetodo').value;
+    const monto = Number(document.getElementById('walletStaffMonto-'+sfx).value);
+    const metodo = document.getElementById('walletStaffMetodo-'+sfx).value;
     if(!monto || monto<=0){ toast('Ingresa un monto válido', true); return; }
     try{
       await this.ajustar({
