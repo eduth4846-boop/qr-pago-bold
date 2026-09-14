@@ -979,7 +979,10 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
             </div>
             <div class="field">
               <label>Contraseña</label>
-              <input id="clientPassword" type="password" autocomplete="current-password" placeholder="••••••••" required>
+              <div style="position:relative;">
+                <input id="clientPassword" type="password" autocomplete="current-password" placeholder="••••••••" required style="padding-right:44px; width:100%;">
+                <button type="button" onclick="togglePwdField('clientPassword', this)" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:17px; padding:6px;">👁</button>
+              </div>
             </div>
             <button class="btn btn-primary btn-block btn-lg" id="clientLoginBtn" type="submit">Ingresar</button>
           </form>
@@ -1051,12 +1054,19 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
             </div>
             <div class="field">
               <label>Contraseña</label>
-              <input id="clientRegisterPassword" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres" required>
+              <div style="position:relative;">
+                <input id="clientRegisterPassword" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres" required style="padding-right:44px; width:100%;">
+                <button type="button" onclick="togglePwdField('clientRegisterPassword', this)" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:17px; padding:6px;">👁</button>
+              </div>
             </div>
             <div class="field">
               <label>Confirmar contraseña</label>
-              <input id="clientRegisterPassword2" type="password" autocomplete="new-password" placeholder="Repite tu contraseña" required>
+              <div style="position:relative;">
+                <input id="clientRegisterPassword2" type="password" autocomplete="new-password" placeholder="Repite tu contraseña" required style="padding-right:44px; width:100%;">
+                <button type="button" onclick="togglePwdField('clientRegisterPassword2', this)" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:17px; padding:6px;">👁</button>
+              </div>
             </div>
+            <p class="hint" style="margin-top:-6px;">Toca el 👁 para verificar qué quedó escrito antes de crear la cuenta — algunos celulares sugieren una contraseña automática y la reemplazan sin avisar.</p>
             <button class="btn btn-primary btn-block btn-lg" id="clientRegisterBtn" type="submit">Crear cuenta</button>
           </form>
           <div class="client-auth-note">Después de crear tu cuenta volverás al evento que seleccionaste.</div>
@@ -1296,6 +1306,21 @@ function clearBoldOrder(){
 /* =========================================================
    UTILIDADES
 ========================================================= */
+// Botón "👁" de mostrar/ocultar contraseña en los formularios de cliente
+// (login, registro y recuperación). Existe para que el cliente pueda
+// verificar, ANTES de enviar el formulario, qué quedó realmente escrito
+// en el campo: en celulares es común que el teclado sugiera y reemplace
+// el texto por una "contraseña segura" generada automáticamente (Safari/
+// Chrome en iOS lo hacen solo con ver dos campos type="password" en un
+// formulario), y la persona no se da cuenta hasta que después no puede
+// iniciar sesión con la contraseña que creía haber escrito.
+function togglePwdField(id, btn){
+  const el = document.getElementById(id);
+  if(!el) return;
+  const showing = el.type === 'text';
+  el.type = showing ? 'password' : 'text';
+  if(btn) btn.textContent = showing ? '👁' : '🙈';
+}
 function toast(msg, err){
   const wrap = document.getElementById('toastWrap');
   const el = document.createElement('div');
@@ -2681,7 +2706,20 @@ const ClienteAuth = {
         else toast('No se pudo crear la cuenta: '+msg,true);
         return;
       }
-      const customer=data&&data[0]; if(!customer){toast('No se pudo crear la cuenta',true);return;}
+      // OJO (bug real encontrado): crear_cliente() está declarado en SQL
+      // como "returns public.clientes" (una sola fila, no "setof"), y para
+      // ese tipo de función Supabase/PostgREST NO envuelve la respuesta en
+      // un arreglo — "data" llega como el objeto del cliente directamente,
+      // no como [ {...} ]. Con "data && data[0]" eso da "undefined" (un
+      // objeto no tiene índice "0"), así que esta pantalla mostraba
+      // "No se pudo crear la cuenta" AUNQUE LA CUENTA SÍ SE HUBIERA CREADO
+      // en la base de datos (el INSERT ya se había confirmado). Por eso
+      // aparecía en la pestaña "Usuarios" del admin aunque el registro
+      // "fallara". Se acepta tanto la forma en arreglo como la forma en
+      // objeto suelto, para que funcione sin importar la versión exacta
+      // de PostgREST/Supabase.
+      const customer = Array.isArray(data) ? data[0] : data;
+      if(!customer){toast('No se pudo crear la cuenta',true);return;}
       this.pendingCustomer=customer; this.pendingRecoveryCode=customer.recovery_code||null;
       // Si el registro vino de una verificación Didit aprobada, se marca la
       // cuenta como verificada. Se llama aparte (no como parámetro de
