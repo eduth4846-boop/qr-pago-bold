@@ -14,6 +14,9 @@
 <!-- qrcodejs y html5-qrcode ya NO se cargan aquí: se cargan bajo demanda (ver loadScriptOnce) solo cuando
      el usuario realmente entra a la pantalla que los necesita (ver tickets, escanear QR).
      Esto evita descargar y parsear JS que la mayoría de sesiones nunca usa. -->
+<!-- Componente web para la animación Lottie de "✅ Verificado" que se
+     muestra al volver de Didit (ver KycSuccessOverlay). -->
+<script type="module" src="https://unpkg.com/@lottiefiles/dotlottie-wc@0.9.28/dist/dotlottie-wc.js"></script>
 <style>
 /* =========================================================
    CASHLESS COLOMBIA — design tokens NEÓN
@@ -249,6 +252,12 @@ input:focus,select:focus,textarea:focus{border-color:var(--pink); box-shadow:0 0
 .btn-block{width:100%;}
 .btn-sm{padding:8px 12px; font-size:12.5px; border-radius:8px;}
 .btn-lg{padding:17px 22px; font-size:17px; border-radius:13px; letter-spacing:.03em;}
+
+/* Botones de "¿cómo quieres recibir el código?" en recuperar contraseña
+   (correo / SMS / WhatsApp) — ver ClienteAuth.setRecoveryChannel. */
+.recovery-channels{display:flex; gap:8px; margin-bottom:14px;}
+.recovery-channel-btn{flex:1; padding:10px 6px; font-size:12.5px; text-align:center; border-radius:10px; border:1px solid var(--line-soft); background:transparent; color:var(--text-dim); cursor:pointer; transition:all .15s ease;}
+.recovery-channel-btn.active{border-color:var(--lime); color:var(--lime); box-shadow:0 0 10px rgba(198,255,58,.25) inset; font-weight:600;}
 .pill-tab{
   padding:9px 15px; border-radius:10px; border:1px solid var(--line-soft); background:var(--panel);
   color:var(--text-dim); cursor:pointer; font-size:13px; font-weight:600; white-space:nowrap; transition:.2s;
@@ -827,6 +836,13 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 .modal-bg{position:fixed; inset:0; background:rgba(4,2,10,.72); backdrop-filter:blur(3px); z-index:150; display:flex; align-items:center; justify-content:center; padding:20px; animation:fadein .2s ease;}
 .modal{background:var(--panel); border:1px solid var(--line-soft); border-radius:16px; padding:22px; max-width:460px; width:100%; box-shadow:var(--shadow), var(--glow-violet); max-height:88vh; overflow-y:auto;}
 
+/* Overlay de "✅ Verificado correctamente" que se muestra 2 segundos al
+   volver de Didit con el resultado aprobado, justo antes de continuar
+   automáticamente (ver KycSuccessOverlay). Por encima de cualquier modal. */
+.kyc-success-overlay{position:fixed; inset:0; z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; background:rgba(4,2,10,.92); backdrop-filter:blur(4px); animation:fadein .25s ease; text-align:center; padding:20px;}
+.kyc-success-overlay dotlottie-wc{width:180px; height:180px;}
+.kyc-success-overlay .kyc-success-text{font-family:'Rajdhani',sans-serif; font-weight:700; font-size:22px; letter-spacing:.02em; color:var(--lime); text-shadow:0 0 16px rgba(198,255,58,.55);}
+
 .footer-note{text-align:center; color:var(--text-dim); font-size:11.5px; padding:20px; opacity:.6;}
 ::-webkit-scrollbar{width:8px; height:8px;}
 ::-webkit-scrollbar-thumb{background:linear-gradient(var(--pink),var(--violet)); border-radius:8px;}
@@ -900,6 +916,13 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
 </div>
 <div id="cursor-glow"></div>
 <div class="toast-wrap" id="toastWrap"></div>
+
+<!-- Overlay de "✅ Verificado correctamente" (ver KycSuccessOverlay), oculto
+     hasta que DiditKYC confirma una verificación aprobada al volver de Didit. -->
+<div id="kycSuccessOverlay" class="kyc-success-overlay hide" role="status" aria-live="polite">
+  <dotlottie-wc src="https://lottie.host/6444b454-e5f0-49d6-b691-6aab89fa4612/kNcTT8RGUE.lottie" autoplay speed="1"></dotlottie-wc>
+  <div class="kyc-success-text">✅ Verificado correctamente</div>
+</div>
 
 <div id="app">
   <div class="topbar" id="topbar">
@@ -1081,20 +1104,39 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="card client-auth-card">
           <div class="section-title"><h2>Recuperar contraseña</h2></div>
           <div id="recoveryStep1">
-            <p class="hint client-auth-subtitle">Usa el código de recuperación que recibiste al crear tu cuenta. No se usa correo ni proveedor externo.</p>
-            <form onsubmit="event.preventDefault(); ClienteAuth.recoverStep1();">
-              <div class="field"><label>Correo electrónico</label><input id="clientRecoveryEmail" type="email" autocomplete="email" placeholder="correo@ejemplo.com" required></div>
-              <div class="field"><label>Código de recuperación</label><input id="clientRecoveryCode" type="text" autocomplete="one-time-code" placeholder="XXXXXXXX-XXXXXXXX" required></div>
-              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn" type="submit">Recuperar contraseña</button>
+            <p class="hint client-auth-subtitle">Elige cómo quieres recibir el código de verificación.</p>
+            <div class="recovery-channels" id="recoveryChannels">
+              <button type="button" class="recovery-channel-btn active" data-canal="email" onclick="ClienteAuth.setRecoveryChannel('email', this)">📧 Correo</button>
+              <button type="button" class="recovery-channel-btn" data-canal="sms" onclick="ClienteAuth.setRecoveryChannel('sms', this)">📱 SMS</button>
+              <button type="button" class="recovery-channel-btn" data-canal="whatsapp" onclick="ClienteAuth.setRecoveryChannel('whatsapp', this)">💬 WhatsApp</button>
+            </div>
+            <form onsubmit="event.preventDefault(); ClienteAuth.recoverEnviarCodigo();">
+              <div class="field"><label>Correo electrónico de tu cuenta</label><input id="clientRecoveryEmail" type="email" autocomplete="email" placeholder="correo@ejemplo.com" required></div>
+              <p class="hint" id="recoveryPhoneHint" style="display:none; margin:-8px 0 14px;">El código se enviará al número de teléfono registrado en tu cuenta.</p>
+              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn" type="submit">Enviar código</button>
             </form>
           </div>
           <div id="recoveryStep2" class="hide">
-            <p class="hint client-auth-subtitle">Ya generamos una contraseña temporal para tu cuenta. Por seguridad, define ahora tu contraseña definitiva.</p>
-            <form onsubmit="event.preventDefault(); ClienteAuth.recoverStep2();">
-              <div class="field"><label>Nueva contraseña</label><input id="clientRecoveryPassword" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres" required></div>
-              <div class="field"><label>Confirmar contraseña</label><input id="clientRecoveryPassword2" type="password" autocomplete="new-password" placeholder="Repite tu contraseña" required></div>
+            <p class="hint client-auth-subtitle" id="recoveryStep2Hint">Ingresa el código que te enviamos, junto con tu nueva contraseña.</p>
+            <form onsubmit="event.preventDefault(); ClienteAuth.recoverVerificarCodigo();">
+              <div class="field"><label>Código de verificación</label><input id="clientRecoveryCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required></div>
+              <div class="field">
+                <label>Nueva contraseña</label>
+                <div style="position:relative;">
+                  <input id="clientRecoveryPassword" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres" required style="padding-right:44px; width:100%;">
+                  <button type="button" onclick="togglePwdField('clientRecoveryPassword', this)" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:17px; padding:6px;">👁</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Confirmar contraseña</label>
+                <div style="position:relative;">
+                  <input id="clientRecoveryPassword2" type="password" autocomplete="new-password" placeholder="Repite tu contraseña" required style="padding-right:44px; width:100%;">
+                  <button type="button" onclick="togglePwdField('clientRecoveryPassword2', this)" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:17px; padding:6px;">👁</button>
+                </div>
+              </div>
               <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn2" type="submit">Guardar contraseña definitiva</button>
             </form>
+            <button class="client-auth-link" type="button" onclick="ClienteAuth.recoverEnviarCodigo()">¿No te llegó? Reenviar código</button>
           </div>
         </div>
       </div>
@@ -2283,6 +2325,31 @@ const BiometricAuth = {
 };
 
 /* =========================================================
+   KYC SUCCESS OVERLAY — pantalla de "✅ Verificado correctamente" con
+   animación (Lottie) que se muestra 2 segundos justo cuando Didit
+   confirma una verificación aprobada, antes de continuar automáticamente
+   a donde corresponda (la cuenta, la compra, la wallet). Un solo lugar
+   para esto porque el mismo comportamiento aplica a los 3 contextos de
+   DiditKYC (registro, login y wallet) — ver _resolveRegisterReturn/
+   _resolveLoginReturn/_resolveWalletReturn más abajo.
+========================================================= */
+const KycSuccessOverlay = {
+  show(onDone){
+    const el = document.getElementById('kycSuccessOverlay');
+    if(!el){ if(onDone) onDone(); return; }
+    // Reinicia la animación cada vez (por si ya se había reproducido antes
+    // en esta misma sesión) volviendo a asignar el "src" del componente.
+    const player = el.querySelector('dotlottie-wc');
+    if(player){ const src = player.getAttribute('src'); player.removeAttribute('src'); requestAnimationFrame(()=>player.setAttribute('src', src)); }
+    el.classList.remove('hide');
+    setTimeout(()=>{
+      el.classList.add('hide');
+      if(onDone) onDone();
+    }, 2000);
+  }
+};
+
+/* =========================================================
    DIDIT KYC — verificación de identidad (documento + rostro)
    -------------------------------------------------------
    Requiere 3 Edge Functions en Supabase (no se puede llamar a la API
@@ -2451,8 +2518,9 @@ const DiditKYC = {
     }
     try{ await sb.rpc('marcar_cliente_verificado',{p_cliente_id:clienteId,p_kyc_session_id:pending.session_id}); }catch(e){}
     WalletKit._kycVerificadoCache = true;
-    this._setStatusMsg('✅ Identidad verificada.', false, 'walletKycStatus');
-    WalletKit.renderCliente();
+    this._setStatusMsg('', false, 'walletKycStatus');
+    // Check verde de "Verificado correctamente" 2 segundos y de una vez a la wallet.
+    KycSuccessOverlay.show(()=>{ WalletKit.renderCliente(); });
   },
   async _resolveRegisterReturn(pending){
     const evento = pending.evento_id ? await (async()=>{ try{ const {data}=await sb.from('eventos').select('*').eq('id',pending.evento_id).limit(1); return data&&data[0]; }catch(e){ return null; } })() : null;
@@ -2472,7 +2540,13 @@ const DiditKYC = {
     if(nombreEl && resultado.nombre) nombreEl.value = resultado.nombre;
     if(cedulaEl && resultado.cedula) cedulaEl.value = resultado.cedula;
     this._verifiedSessionId = pending.session_id;
-    this._setStatusMsg('✅ Identidad verificada. Revisa tus datos y termina de crear tu cuenta.');
+    this._setStatusMsg('');
+    // Check verde de "Verificado correctamente" 2 segundos; como la cuenta
+    // todavía no existe (falta correo/contraseña), al terminar deja ver el
+    // formulario ya con nombre/cédula rellenados para que termine de crearla.
+    KycSuccessOverlay.show(()=>{
+      this._setStatusMsg('✅ Identidad verificada. Revisa tus datos y termina de crear tu cuenta.');
+    });
   },
   async _resolveLoginReturn(pending){
     let loginPending = null;
@@ -2513,8 +2587,11 @@ const DiditKYC = {
     }
     try{ await sb.rpc('marcar_cliente_verificado',{p_cliente_id:customer.id,p_kyc_session_id:pending.session_id}); }catch(e){}
     customer.kyc_verificado = true;
-    this._setStatusMsg('✅ Identidad verificada.', false, 'loginKycStatus');
-    await ClienteAuth.continueToPurchase(customer, evento || await ClienteAuth.getPendingEvento());
+    this._setStatusMsg('', false, 'loginKycStatus');
+    // Check verde de "Verificado correctamente" 2 segundos y de una vez a
+    // la cuenta (sigue el flujo de compra/evento donde se quedó).
+    const eventoFinal = evento || await ClienteAuth.getPendingEvento();
+    KycSuccessOverlay.show(()=>{ ClienteAuth.continueToPurchase(customer, eventoFinal); });
   },
   async _pollSession(sessionId){
     let resultado = null;
@@ -2537,6 +2614,8 @@ const ClienteAuth = {
   pendingCustomer: null,
   pendingRecoveryCode: null,
   _recoveryEmail: null,
+  // Canal elegido para recibir el código de recuperación: 'email' | 'sms' | 'whatsapp'.
+  _recoveryChannel: 'email',
 
   setPendingEvento(evento){
     this.pendingEvento = evento || null;
@@ -2611,41 +2690,30 @@ const ClienteAuth = {
   showRecovery(){
     const loginEmail=document.getElementById('clientEmail')?.value?.trim()||'';
     const recoveryEmail=document.getElementById('clientRecoveryEmail'); if(recoveryEmail&&loginEmail) recoveryEmail.value=loginEmail;
-    // Siempre se entra por el paso 1 (correo + código); el paso 2 (definir
-    // contraseña definitiva) solo aparece después de validar el código.
+    // Siempre se entra por el paso 1 (pedir el correo); el paso 2 (código +
+    // contraseña nueva) solo aparece después de que se envía el código.
     document.getElementById('recoveryStep1')?.classList.remove('hide');
     document.getElementById('recoveryStep2')?.classList.add('hide');
+    const codeEl=document.getElementById('clientRecoveryCode'); if(codeEl) codeEl.value='';
     const p1=document.getElementById('clientRecoveryPassword'); if(p1) p1.value='';
     const p2=document.getElementById('clientRecoveryPassword2'); if(p2) p2.value='';
+    this._recoveryEmail=null;
+    // Vuelve siempre a "correo" como canal por defecto al reabrir esta
+    // pantalla, y resalta ese botón como activo.
+    this._recoveryChannel='email';
+    document.querySelectorAll('#recoveryChannels .recovery-channel-btn').forEach(b=>b.classList.toggle('active', b.dataset.canal==='email'));
+    const phoneHint=document.getElementById('recoveryPhoneHint'); if(phoneHint) phoneHint.style.display='none';
     Router.go('login-cliente-recovery'); setTimeout(()=>document.getElementById('clientRecoveryEmail')?.focus(),40);
   },
-  // Genera una contraseña temporal legible (evita caracteres ambiguos como
-  // 0/O o 1/I/l) para mostrarla en la ventana emergente del paso 1.
-  _generarPasswordTemporal(){
-    const alfabeto='ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-    let pass='';
-    for(let i=0;i<10;i++) pass+=alfabeto[Math.floor(Math.random()*alfabeto.length)];
-    return pass;
-  },
-  // Muestra la contraseña temporal en una ventana emergente y, al cerrarla,
-  // deja al usuario en el paso 2 (definir su contraseña definitiva). No hay
-  // forma de continuar sin pasar por ahí: se obliga a cambiarla de una vez.
-  _mostrarPasswordTemporalModal(passTemporal){
-    document.body.insertAdjacentHTML('beforeend', `
-      <div class="modal-bg" id="recoveryTempPassModal">
-        <div class="modal" style="max-width:420px; text-align:center;">
-          <div class="section-title" style="justify-content:center;"><h2 style="font-size:19px;">🔑 Contraseña temporal</h2></div>
-          <p class="hint">Ya puedes ingresar con esta contraseña temporal. Por seguridad debes reemplazarla ahora mismo por una definitiva.</p>
-          <p class="client-recovery-code" style="margin:14px 0;">${escapeHtml(passTemporal)}</p>
-          <button class="btn btn-primary btn-block btn-lg" type="button" onclick="ClienteAuth._cerrarPasswordTemporalModal()">Entendido, elegir mi contraseña</button>
-        </div>
-      </div>`);
-  },
-  _cerrarPasswordTemporalModal(){
-    document.getElementById('recoveryTempPassModal')?.remove();
-    document.getElementById('recoveryStep1')?.classList.add('hide');
-    document.getElementById('recoveryStep2')?.classList.remove('hide');
-    setTimeout(()=>document.getElementById('clientRecoveryPassword')?.focus(),40);
+  // Cambia el canal por el que se enviará el código (correo/SMS/WhatsApp) y
+  // resalta el botón elegido. El correo/cuenta a recuperar sigue siendo el
+  // mismo campo en los 3 casos: para SMS/WhatsApp el servidor busca el
+  // teléfono registrado en esa cuenta (el cliente no lo vuelve a escribir).
+  setRecoveryChannel(canal, btn){
+    this._recoveryChannel = canal;
+    document.querySelectorAll('#recoveryChannels .recovery-channel-btn').forEach(b=>b.classList.toggle('active', b===btn));
+    const phoneHint=document.getElementById('recoveryPhoneHint');
+    if(phoneHint) phoneHint.style.display = (canal==='sms'||canal==='whatsapp') ? 'block' : 'none';
   },
   backToEventOrLanding(){
     const evt=this.pendingEvento; Router.go('landing');
@@ -2733,49 +2801,81 @@ const ClienteAuth = {
       Router.go('login-cliente-created');
     }finally{if(btn){btn.disabled=false;btn.textContent='Crear cuenta';}}
   },
-  // Paso 1: valida correo + código de recuperación y, si son correctos,
-  // ya deja la cuenta con una contraseña temporal (generada acá mismo) que
-  // se muestra en una ventana emergente. No se pide la contraseña nueva
-  // todavía: eso ocurre en el paso 2, de forma obligatoria.
-  async recoverStep1(){
+  // Paso 1: pide a la Edge Function "recovery-enviar-codigo" que envíe (vía
+  // Twilio Verify) un código de verificación por el canal elegido (correo,
+  // SMS o WhatsApp — this._recoveryChannel). El correo identifica siempre
+  // la cuenta; para SMS/WhatsApp, el servidor busca el teléfono guardado en
+  // esa cuenta (no se le vuelve a pedir aquí). Por seguridad, la respuesta
+  // es la misma exista o no una cuenta con ese correo (así este formulario
+  // no sirve para averiguar qué correos están registrados) — ver
+  // TWILIO_RECOVERY_EDGE_FUNCTIONS.md.
+  async recoverEnviarCodigo(){
     const email=document.getElementById('clientRecoveryEmail').value.trim().toLowerCase();
-    const code=document.getElementById('clientRecoveryCode').value.trim().toUpperCase();
-    if(!email||!code){toast('Completa correo y código de recuperación',true);return;}
-    const btn=document.getElementById('clientRecoveryBtn'); if(btn){btn.disabled=true;btn.textContent='Validando...';}
+    if(!email){toast('Ingresa tu correo electrónico',true);return;}
+    const canal=this._recoveryChannel||'email';
+    const btn=document.getElementById('clientRecoveryBtn'); if(btn){btn.disabled=true;btn.textContent='Enviando...';}
     try{
-      const passTemporal=this._generarPasswordTemporal();
-      const {data,error}=await sb.rpc('recuperar_cliente',{p_correo:email,p_codigo:code,p_nueva_password:passTemporal});
-      if(error){toast('No se pudo validar el código: '+error.message,true);return;}
-      const customer=data&&data[0]; if(!customer){toast('Correo o código de recuperación incorrectos.',true);return;}
-      this.pendingCustomer=customer;
-      this._recoveryEmail=email;
-      this._mostrarPasswordTemporalModal(passTemporal);
-    }finally{if(btn){btn.disabled=false;btn.textContent='Recuperar contraseña';}}
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/recovery-enviar-codigo', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
+        body: JSON.stringify({ correo: email, canal })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error){ toast('No se pudo enviar el código: ' + (data.error||'intenta de nuevo'), true); return; }
+      this._recoveryEmail = email;
+      const hintEl=document.getElementById('recoveryStep2Hint');
+      if(hintEl){
+        const destino = canal==='email' ? `tu correo (<b>${escapeHtml(email)}</b>)` : canal==='sms' ? 'un SMS a tu teléfono registrado' : 'un WhatsApp a tu teléfono registrado';
+        hintEl.innerHTML = `Revisa ${destino} e ingresa el código que te enviamos, junto con tu nueva contraseña.`;
+      }
+      const codeEl=document.getElementById('clientRecoveryCode'); if(codeEl) codeEl.value='';
+      document.getElementById('recoveryStep1')?.classList.add('hide');
+      document.getElementById('recoveryStep2')?.classList.remove('hide');
+      toast('Te enviamos un código' + (canal==='email' ? ' por correo.' : canal==='sms' ? ' por SMS.' : ' por WhatsApp.'));
+      setTimeout(()=>document.getElementById('clientRecoveryCode')?.focus(),40);
+    }catch(err){
+      toast('No se pudo enviar el código: ' + (err.message||err), true);
+    }finally{
+      if(btn){btn.disabled=false;btn.textContent='Enviar código';}
+    }
   },
-  // Paso 2: obligatorio antes de poder usar la cuenta de nuevo. Reutiliza
-  // el mismo código de recuperación (sigue siendo válido) para dejar ya la
-  // contraseña definitiva que eligió el usuario.
-  async recoverStep2(){
+  // Paso 2: la Edge Function "recovery-verificar-codigo" confirma el código
+  // contra Twilio (nunca se llama a Twilio directo desde el navegador,
+  // expondría las credenciales) y, si es válido, deja ya la contraseña
+  // definitiva que eligió el cliente. Se reenvía el mismo canal del paso 1
+  // porque Twilio necesita el mismo "To" (correo o teléfono) para verificar
+  // el código que para haberlo enviado.
+  async recoverVerificarCodigo(){
     const email=this._recoveryEmail;
-    const code=document.getElementById('clientRecoveryCode').value.trim().toUpperCase();
+    const canal=this._recoveryChannel||'email';
+    const code=document.getElementById('clientRecoveryCode').value.trim();
     const p1=document.getElementById('clientRecoveryPassword').value;
     const p2=document.getElementById('clientRecoveryPassword2').value;
-    if(!email||!code){toast('Vuelve a solicitar el código de recuperación',true); this.showRecovery(); return;}
+    if(!email){toast('Vuelve a solicitar el código de recuperación',true); this.showRecovery(); return;}
+    if(!code){toast('Ingresa el código que te enviamos',true);return;}
     if(!p1||!p2){toast('Completa todos los campos',true);return;}
     if(p1.length<6){toast('La contraseña debe tener al menos 6 caracteres',true);return;}
     if(p1!==p2){toast('Las contraseñas no coinciden',true);return;}
     const btn=document.getElementById('clientRecoveryBtn2'); if(btn){btn.disabled=true;btn.textContent='Guardando...';}
     try{
-      const {data,error}=await sb.rpc('recuperar_cliente',{p_correo:email,p_codigo:code,p_nueva_password:p1});
-      if(error){toast('No se pudo actualizar la contraseña: '+error.message,true);return;}
-      const customer=data&&data[0]; if(!customer){toast('No se pudo actualizar la contraseña, intenta de nuevo.',true);return;}
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/recovery-verificar-codigo', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
+        body: JSON.stringify({ correo: email, codigo: code, nueva_password: p1, canal })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error){ toast('No se pudo actualizar la contraseña: ' + (data.error||'código incorrecto o vencido'), true); return; }
       toast('Contraseña actualizada correctamente.');
       this._recoveryEmail=null;
       // Mantiene el formulario normal de correo/contraseña para que el
       // usuario inicie sesión ya con su contraseña definitiva.
       document.getElementById('clientEmail').value=email; document.getElementById('clientPassword').value='';
-      this.pendingCustomer=customer; this.showLogin();
-    }finally{if(btn){btn.disabled=false;btn.textContent='Guardar contraseña definitiva';}}
+      this.showLogin();
+    }catch(err){
+      toast('No se pudo actualizar la contraseña: ' + (err.message||err), true);
+    }finally{
+      if(btn){btn.disabled=false;btn.textContent='Guardar contraseña definitiva';}
+    }
   },
   finishRegistration(){
     const evento=this.pendingEvento, customer=this.pendingCustomer;
