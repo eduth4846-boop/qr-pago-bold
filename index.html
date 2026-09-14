@@ -1109,24 +1109,48 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
         <div class="card client-auth-card">
           <div class="section-title"><h2>Recuperar contraseña</h2></div>
           <div id="recoveryStep1">
-            <p class="hint client-auth-subtitle">Elige cómo quieres recibir el código de verificación.</p>
-            <div class="recovery-channels" id="recoveryChannels">
-              <button type="button" class="recovery-channel-btn active" data-canal="email" onclick="ClienteAuth.setRecoveryChannel('email', this)">📧 Correo</button>
-              <button type="button" class="recovery-channel-btn" data-canal="sms" onclick="ClienteAuth.setRecoveryChannel('sms', this)">📱 SMS</button>
-              <button type="button" class="recovery-channel-btn" data-canal="whatsapp" onclick="ClienteAuth.setRecoveryChannel('whatsapp', this)">💬 WhatsApp</button>
-            </div>
-            <form onsubmit="event.preventDefault(); ClienteAuth.recoverEnviarCodigo();">
+            <p class="hint client-auth-subtitle">Ingresa tu correo y tu palabra de seguridad para continuar.</p>
+            <form onsubmit="event.preventDefault(); ClienteAuth.recoverContinuar();">
               <div class="field"><label>Correo electrónico de tu cuenta</label><input id="clientRecoveryEmail" type="email" autocomplete="email" placeholder="correo@ejemplo.com" required></div>
               <div class="field"><label>Palabra de seguridad</label><input id="clientRecoveryPalabra" type="text" autocomplete="off" placeholder="La palabra que elegiste al crear tu cuenta" required></div>
-              <p class="hint" id="recoveryPhoneHint" style="display:none; margin:-8px 0 14px;">El código se enviará al número de teléfono registrado en tu cuenta.</p>
-              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn" type="submit">Enviar código</button>
+              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn" type="submit">Continuar</button>
             </form>
             <button class="client-auth-link" type="button" onclick="ClienteAuth.openSoporteChat()">¿No recuerdas tu palabra de seguridad? Habla con soporte</button>
+
+            <!-- ============================================================
+                 TWILIO VERIFY (código por correo/SMS/WhatsApp) — DESACTIVADO
+                 A PROPÓSITO. El flujo activo de arriba (correo + palabra de
+                 seguridad → nueva contraseña, sin código) lo reemplaza por
+                 ser más rápido y sencillo para el cliente. Este bloque y las
+                 funciones ClienteAuth.recoverEnviarCodigo /
+                 recoverVerificarCodigo / setRecoveryChannel se dejan
+                 completos y funcionando en el código (nadie los borró), por
+                 si en el futuro se quiere reactivar esta verificación de
+                 "algo que recibes" además de la palabra de seguridad. Para
+                 reactivarlo: quita la clase "hide" de este div, cambia el
+                 formulario de arriba para que llame a recoverEnviarCodigo()
+                 en vez de recoverContinuar(), y en recoveryStep2 vuelve a
+                 mostrar el campo del código y llama a
+                 recoverVerificarCodigo() en vez de recoverGuardarPassword().
+                 Ver TWILIO_RECOVERY_EDGE_FUNCTIONS.md.
+                 ============================================================ -->
+            <div class="hide">
+              <div class="recovery-channels" id="recoveryChannels">
+                <button type="button" class="recovery-channel-btn active" data-canal="email" onclick="ClienteAuth.setRecoveryChannel('email', this)">📧 Correo</button>
+                <button type="button" class="recovery-channel-btn" data-canal="sms" onclick="ClienteAuth.setRecoveryChannel('sms', this)">📱 SMS</button>
+                <button type="button" class="recovery-channel-btn" data-canal="whatsapp" onclick="ClienteAuth.setRecoveryChannel('whatsapp', this)">💬 WhatsApp</button>
+              </div>
+              <p class="hint" id="recoveryPhoneHint" style="display:none; margin:-8px 0 14px;">El código se enviará al número de teléfono registrado en tu cuenta.</p>
+            </div>
           </div>
           <div id="recoveryStep2" class="hide">
-            <p class="hint client-auth-subtitle" id="recoveryStep2Hint">Ingresa el código que te enviamos, junto con tu nueva contraseña.</p>
-            <form onsubmit="event.preventDefault(); ClienteAuth.recoverVerificarCodigo();">
-              <div class="field"><label>Código de verificación</label><input id="clientRecoveryCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="4" placeholder="1234" required></div>
+            <p class="hint client-auth-subtitle" id="recoveryStep2Hint">Correo y palabra de seguridad correctos. Elige tu nueva contraseña.</p>
+            <form onsubmit="event.preventDefault(); ClienteAuth.recoverGuardarPassword();">
+              <!-- Campo del código de Twilio, sin usar mientras ese flujo esté
+                   desactivado (ver bloque comentado arriba) — se deja el
+                   input en el DOM, oculto, para no tener que tocar
+                   recoverVerificarCodigo() si se reactiva más adelante. -->
+              <input id="clientRecoveryCode" type="hidden" value="">
               <div class="field">
                 <label>Nueva contraseña</label>
                 <div style="position:relative;">
@@ -1141,9 +1165,9 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
                   <button type="button" onclick="togglePwdField('clientRecoveryPassword2', this)" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:17px; padding:6px;">👁</button>
                 </div>
               </div>
-              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn2" type="submit">Guardar contraseña definitiva</button>
+              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn2" type="submit">Guardar contraseña nueva</button>
             </form>
-            <button class="client-auth-link" type="button" onclick="ClienteAuth.recoverEnviarCodigo()">¿No te llegó? Reenviar código</button>
+            <button class="client-auth-link" type="button" onclick="ClienteAuth.recoverVolverPaso1()">‹ Corregir correo o palabra de seguridad</button>
           </div>
         </div>
       </div>
@@ -2639,7 +2663,11 @@ const ClienteAuth = {
   pendingCustomer: null,
   pendingRecoveryCode: null,
   _recoveryEmail: null,
+  _recoveryPalabra: null,
   // Canal elegido para recibir el código de recuperación: 'email' | 'sms' | 'whatsapp'.
+  // Sin usar mientras el flujo de Twilio esté desactivado (ver
+  // recoverEnviarCodigo/recoverVerificarCodigo más abajo) — se deja tal
+  // cual por si se reactiva.
   _recoveryChannel: 'email',
 
   setPendingEvento(evento){
@@ -2715,8 +2743,8 @@ const ClienteAuth = {
   showRecovery(){
     const loginEmail=document.getElementById('clientEmail')?.value?.trim()||'';
     const recoveryEmail=document.getElementById('clientRecoveryEmail'); if(recoveryEmail&&loginEmail) recoveryEmail.value=loginEmail;
-    // Siempre se entra por el paso 1 (pedir el correo); el paso 2 (código +
-    // contraseña nueva) solo aparece después de que se envía el código.
+    // Siempre se entra por el paso 1 (correo + palabra de seguridad); el
+    // paso 2 (nueva contraseña) solo aparece después de pasar el paso 1.
     document.getElementById('recoveryStep1')?.classList.remove('hide');
     document.getElementById('recoveryStep2')?.classList.add('hide');
     const codeEl=document.getElementById('clientRecoveryCode'); if(codeEl) codeEl.value='';
@@ -2724,12 +2752,80 @@ const ClienteAuth = {
     const p2=document.getElementById('clientRecoveryPassword2'); if(p2) p2.value='';
     const palabraEl=document.getElementById('clientRecoveryPalabra'); if(palabraEl) palabraEl.value='';
     this._recoveryEmail=null;
+    this._recoveryPalabra=null;
     // Vuelve siempre a "correo" como canal por defecto al reabrir esta
-    // pantalla, y resalta ese botón como activo.
+    // pantalla, y resalta ese botón como activo. Sin efecto visible
+    // mientras el bloque de Twilio esté oculto, pero se deja consistente
+    // por si se reactiva.
     this._recoveryChannel='email';
     document.querySelectorAll('#recoveryChannels .recovery-channel-btn').forEach(b=>b.classList.toggle('active', b.dataset.canal==='email'));
     const phoneHint=document.getElementById('recoveryPhoneHint'); if(phoneHint) phoneHint.style.display='none';
     Router.go('login-cliente-recovery'); setTimeout(()=>document.getElementById('clientRecoveryEmail')?.focus(),40);
+  },
+  // Paso 1 → paso 2 del flujo ACTIVO (correo + palabra de seguridad, sin
+  // Twilio): esto es solo una transición de pantalla, sin llamada al
+  // servidor todavía — la validación real de la palabra de seguridad
+  // ocurre junto con el cambio de contraseña, en recoverGuardarPassword(),
+  // dentro del RPC "actualizar_password_con_palabra_seguridad" (ver
+  // schema_kyc_clientes.sql v9). Así es más simple y rápido: no hace falta
+  // esperar ningún código.
+  recoverContinuar(){
+    const email=document.getElementById('clientRecoveryEmail').value.trim().toLowerCase();
+    const palabra=document.getElementById('clientRecoveryPalabra').value.trim();
+    if(!email){toast('Ingresa tu correo electrónico',true);return;}
+    if(!palabra){toast('Ingresa tu palabra de seguridad',true);return;}
+    this._recoveryEmail=email;
+    this._recoveryPalabra=palabra;
+    const p1=document.getElementById('clientRecoveryPassword'); if(p1) p1.value='';
+    const p2=document.getElementById('clientRecoveryPassword2'); if(p2) p2.value='';
+    document.getElementById('recoveryStep1')?.classList.add('hide');
+    document.getElementById('recoveryStep2')?.classList.remove('hide');
+    setTimeout(()=>document.getElementById('clientRecoveryPassword')?.focus(),40);
+  },
+  // Vuelve al paso 1 sin perder lo que ya había escrito, por si se
+  // equivocó de correo o de palabra de seguridad.
+  recoverVolverPaso1(){
+    document.getElementById('recoveryStep2')?.classList.add('hide');
+    document.getElementById('recoveryStep1')?.classList.remove('hide');
+    setTimeout(()=>document.getElementById('clientRecoveryPalabra')?.focus(),40);
+  },
+  // Cambia la contraseña directo, validando correo + palabra de seguridad
+  // dentro del mismo RPC (llamado directo con la llave "anon", igual que
+  // validar_cliente — no hace falta pasar por una Edge Function porque no
+  // hay ningún secreto de un proveedor externo involucrado en este flujo).
+  // Si el correo y la palabra no coinciden, el RPC no devuelve ninguna
+  // fila y se avisa con el mismo mensaje sin importar cuál de los dos
+  // estaba mal (no se distingue "correo no existe" de "palabra
+  // incorrecta").
+  async recoverGuardarPassword(){
+    const email=this._recoveryEmail;
+    const palabra=this._recoveryPalabra;
+    const p1=document.getElementById('clientRecoveryPassword').value;
+    const p2=document.getElementById('clientRecoveryPassword2').value;
+    if(!email||!palabra){toast('Vuelve a ingresar tu correo y tu palabra de seguridad',true); this.showRecovery(); return;}
+    if(!p1||!p2){toast('Completa todos los campos',true);return;}
+    if(p1.length<6){toast('La contraseña debe tener al menos 6 caracteres',true);return;}
+    if(p1!==p2){toast('Las contraseñas no coinciden',true);return;}
+    const btn=document.getElementById('clientRecoveryBtn2'); if(btn){btn.disabled=true;btn.textContent='Guardando...';}
+    try{
+      const {data,error} = await sb.rpc('actualizar_password_con_palabra_seguridad', {
+        p_correo: email, p_palabra_seguridad: palabra, p_nueva_password: p1
+      });
+      if(error){ toast('No se pudo actualizar la contraseña: '+error.message, true); return; }
+      // Mismo patrón defensivo que ya se usó en register()/recovery con
+      // Twilio: el RPC retorna "setof clientes", así que debería llegar
+      // como arreglo, pero por si acaso...
+      const cliente = Array.isArray(data) ? data[0] : data;
+      if(!cliente){ toast('Correo o palabra de seguridad incorrectos', true); return; }
+      toast('Contraseña actualizada correctamente.');
+      this._recoveryEmail=null; this._recoveryPalabra=null;
+      document.getElementById('clientEmail').value=email; document.getElementById('clientPassword').value='';
+      this.showLogin();
+    }catch(err){
+      toast('No se pudo actualizar la contraseña: '+(err.message||err), true);
+    }finally{
+      if(btn){btn.disabled=false;btn.textContent='Guardar contraseña nueva';}
+    }
   },
   // Cambia el canal por el que se enviará el código (correo/SMS/WhatsApp) y
   // resalta el botón elegido. El correo/cuenta a recuperar sigue siendo el
@@ -2861,6 +2957,18 @@ const ClienteAuth = {
       Router.go('login-cliente-created');
     }finally{if(btn){btn.disabled=false;btn.textContent='Crear cuenta';}}
   },
+  // ============================================================
+  // A PARTIR DE AQUÍ: flujo de recuperación con Twilio Verify (correo/
+  // SMS/WhatsApp), DESACTIVADO A PROPÓSITO — el flujo activo hoy es
+  // recoverContinuar() + recoverGuardarPassword() (correo + palabra de
+  // seguridad, sin código). Estas funciones (recoverEnviarCodigo,
+  // recoverVerificarCodigo, setRecoveryChannel) se dejan completas y sin
+  // romper nada, listas para reactivar si en el futuro se quiere volver a
+  // pedir un código de un solo uso — ver el comentario en el HTML de
+  // #recoveryStep1 con los pasos exactos para reactivarlo, y
+  // TWILIO_RECOVERY_EDGE_FUNCTIONS.md para las Edge Functions que esto
+  // necesita.
+  // ============================================================
   // Paso 1: pide a la Edge Function "recovery-enviar-codigo" que envíe (vía
   // Twilio Verify) un código de verificación por el canal elegido (correo,
   // SMS o WhatsApp — this._recoveryChannel). El correo identifica siempre
