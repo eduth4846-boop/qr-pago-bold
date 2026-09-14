@@ -1090,6 +1090,11 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
               </div>
             </div>
             <p class="hint" style="margin-top:-6px;">Toca el 👁 para verificar qué quedó escrito antes de crear la cuenta — algunos celulares sugieren una contraseña automática y la reemplazan sin avisar.</p>
+            <div class="field">
+              <label>Palabra de seguridad</label>
+              <input id="clientRegisterPalabraSeguridad" type="text" autocomplete="off" placeholder="Una palabra fácil de recordar, solo para ti" required>
+            </div>
+            <p class="hint" style="margin-top:-6px;">La usarás más adelante para recuperar tu contraseña. Elige algo que solo tú sepas — evita tu nombre, tu cédula o algo obvio.</p>
             <button class="btn btn-primary btn-block btn-lg" id="clientRegisterBtn" type="submit">Crear cuenta</button>
           </form>
           <div class="client-auth-note">Después de crear tu cuenta volverás al evento que seleccionaste.</div>
@@ -1112,14 +1117,16 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
             </div>
             <form onsubmit="event.preventDefault(); ClienteAuth.recoverEnviarCodigo();">
               <div class="field"><label>Correo electrónico de tu cuenta</label><input id="clientRecoveryEmail" type="email" autocomplete="email" placeholder="correo@ejemplo.com" required></div>
+              <div class="field"><label>Palabra de seguridad</label><input id="clientRecoveryPalabra" type="text" autocomplete="off" placeholder="La palabra que elegiste al crear tu cuenta" required></div>
               <p class="hint" id="recoveryPhoneHint" style="display:none; margin:-8px 0 14px;">El código se enviará al número de teléfono registrado en tu cuenta.</p>
               <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn" type="submit">Enviar código</button>
             </form>
+            <button class="client-auth-link" type="button" onclick="ClienteAuth.openSoporteChat()">¿No recuerdas tu palabra de seguridad? Habla con soporte</button>
           </div>
           <div id="recoveryStep2" class="hide">
             <p class="hint client-auth-subtitle" id="recoveryStep2Hint">Ingresa el código que te enviamos, junto con tu nueva contraseña.</p>
             <form onsubmit="event.preventDefault(); ClienteAuth.recoverVerificarCodigo();">
-              <div class="field"><label>Código de verificación</label><input id="clientRecoveryCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required></div>
+              <div class="field"><label>Código de verificación</label><input id="clientRecoveryCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="4" placeholder="1234" required></div>
               <div class="field">
                 <label>Nueva contraseña</label>
                 <div style="position:relative;">
@@ -1137,6 +1144,24 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
               <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn2" type="submit">Guardar contraseña definitiva</button>
             </form>
             <button class="client-auth-link" type="button" onclick="ClienteAuth.recoverEnviarCodigo()">¿No te llegó? Reenviar código</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SOPORTE: NO RECUERDA LA PALABRA DE SEGURIDAD ============ -->
+    <section id="view-login-cliente-soporte" class="hide">
+      <div class="auth-shell client-auth-shell">
+        <span class="back" onclick="ClienteAuth.showRecovery()">‹ volver a recuperar contraseña</span>
+        <div class="card client-auth-card">
+          <div class="section-title"><h2>Habla con soporte</h2></div>
+          <p class="hint client-auth-subtitle">Cuéntale a nuestro equipo que no recuerdas tu palabra de seguridad. Te harán unas preguntas para confirmar que eres tú y te ayudarán a recuperar el acceso a tu cuenta.</p>
+          <div class="chat-box">
+            <div class="chat-msgs" id="recoverySoporteMsgs"></div>
+            <div class="chat-input">
+              <input id="recoverySoporteInput" placeholder="Escribe tu mensaje..." onkeydown="if(event.key==='Enter')ClienteAuth.sendSoporteMsg()">
+              <button class="btn btn-primary" onclick="ClienteAuth.sendSoporteMsg()">Enviar</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2697,6 +2722,7 @@ const ClienteAuth = {
     const codeEl=document.getElementById('clientRecoveryCode'); if(codeEl) codeEl.value='';
     const p1=document.getElementById('clientRecoveryPassword'); if(p1) p1.value='';
     const p2=document.getElementById('clientRecoveryPassword2'); if(p2) p2.value='';
+    const palabraEl=document.getElementById('clientRecoveryPalabra'); if(palabraEl) palabraEl.value='';
     this._recoveryEmail=null;
     // Vuelve siempre a "correo" como canal por defecto al reabrir esta
     // pantalla, y resalta ese botón como activo.
@@ -2714,6 +2740,39 @@ const ClienteAuth = {
     document.querySelectorAll('#recoveryChannels .recovery-channel-btn').forEach(b=>b.classList.toggle('active', b===btn));
     const phoneHint=document.getElementById('recoveryPhoneHint');
     if(phoneHint) phoneHint.style.display = (canal==='sms'||canal==='whatsapp') ? 'block' : 'none';
+  },
+  // Chat de soporte para cuando el cliente no recuerda su "palabra de
+  // seguridad" y por lo tanto no puede pasar la validación de
+  // recoverEnviarCodigo(). Reutiliza el mismo ChatKit (tabla "mensajes")
+  // que ya usan el chat de PQR del usuario y el panel del admin — con la
+  // MISMA convención de sala que usa el resto de la app para un cliente ya
+  // logueado ('admin_usuario_'+correo, ver ClienteAuth.continueToPurchase),
+  // así el admin ve esta conversación en la misma pestaña "Chat" de su
+  // panel (AdminApp.tab('a-chat')) sin necesidad de una pantalla nueva. El
+  // admin hace las preguntas de seguridad que considere para confirmar la
+  // identidad del cliente y, si todo cuadra, le cambia la contraseña desde
+  // la pestaña "Usuarios" del panel admin (eso ya existía).
+  _soporteSala: null,
+  _soporteEmail: null,
+  openSoporteChat(){
+    const email=document.getElementById('clientRecoveryEmail').value.trim().toLowerCase();
+    if(!email){ toast('Ingresa primero tu correo electrónico', true); document.getElementById('clientRecoveryEmail')?.focus(); return; }
+    this._soporteEmail = email;
+    this._soporteSala = 'admin_usuario_'+email;
+    Router.go('login-cliente-soporte');
+    const msgsEl=document.getElementById('recoverySoporteMsgs');
+    if(msgsEl){
+      msgsEl.innerHTML = '<p class="hint" style="padding:10px;">Cargando conversación...</p>';
+      ChatKit.load(this._soporteSala, msgsEl, 'usuario');
+      ChatKit.subscribe(this._soporteSala, msgsEl, 'usuario');
+    }
+    setTimeout(()=>document.getElementById('recoverySoporteInput')?.focus(),40);
+  },
+  sendSoporteMsg(){
+    const input=document.getElementById('recoverySoporteInput');
+    if(!this._soporteSala || !input || !input.value.trim()) return;
+    ChatKit.send(this._soporteSala, this._soporteEmail||'Cliente', 'usuario', input.value);
+    input.value='';
   },
   backToEventOrLanding(){
     const evt=this.pendingEvento; Router.go('landing');
@@ -2751,13 +2810,14 @@ const ClienteAuth = {
     const email=document.getElementById('clientRegisterEmail').value.trim().toLowerCase();
     const password=document.getElementById('clientRegisterPassword').value;
     const password2=document.getElementById('clientRegisterPassword2').value;
-    if(!nombre||!cedula||!telefono||!email||!password||!password2){toast('Completa todos los campos',true);return;}
+    const palabraSeguridad=document.getElementById('clientRegisterPalabraSeguridad').value.trim();
+    if(!nombre||!cedula||!telefono||!email||!password||!password2||!palabraSeguridad){toast('Completa todos los campos',true);return;}
     if(password.length<6){toast('La contraseña debe tener al menos 6 caracteres',true);return;}
     if(password!==password2){toast('Las contraseñas no coinciden',true);return;}
     const evento=await this.getPendingEvento(); if(!evento){toast('Selecciona un evento para continuar',true);Router.go('landing');return;}
     const btn=document.getElementById('clientRegisterBtn'); if(btn){btn.disabled=true;btn.textContent='Creando cuenta...';}
     try{
-      const {data,error}=await sb.rpc('crear_cliente',{p_nombre:nombre,p_correo:email,p_password:password,p_cedula:cedula,p_telefono:telefono});
+      const {data,error}=await sb.rpc('crear_cliente',{p_nombre:nombre,p_correo:email,p_password:password,p_cedula:cedula,p_telefono:telefono,p_palabra_seguridad:palabraSeguridad});
       if(error){
         // OJO: antes se detectaba "ya existe" con un patrón que incluía la
         // palabra suelta "correo", y esa palabra aparece en CASI cualquier
@@ -2805,20 +2865,27 @@ const ClienteAuth = {
   // Twilio Verify) un código de verificación por el canal elegido (correo,
   // SMS o WhatsApp — this._recoveryChannel). El correo identifica siempre
   // la cuenta; para SMS/WhatsApp, el servidor busca el teléfono guardado en
-  // esa cuenta (no se le vuelve a pedir aquí). Por seguridad, la respuesta
-  // es la misma exista o no una cuenta con ese correo (así este formulario
-  // no sirve para averiguar qué correos están registrados) — ver
+  // esa cuenta (no se le vuelve a pedir aquí). Ahora también se exige la
+  // "palabra de seguridad" que el cliente eligió al registrarse: la Edge
+  // Function la valida ANTES de pedirle a Twilio que envíe nada, como capa
+  // extra (así, aunque alguien sepa el correo de otra persona, no puede
+  // pedir el código sin saber también su palabra). Por seguridad, la
+  // respuesta es la misma exista o no la cuenta, y coincida o no la
+  // palabra (así este formulario no sirve para averiguar qué correos están
+  // registrados, ni para adivinar la palabra por ensayo y error) — ver
   // TWILIO_RECOVERY_EDGE_FUNCTIONS.md.
   async recoverEnviarCodigo(){
     const email=document.getElementById('clientRecoveryEmail').value.trim().toLowerCase();
+    const palabra=document.getElementById('clientRecoveryPalabra').value.trim();
     if(!email){toast('Ingresa tu correo electrónico',true);return;}
+    if(!palabra){toast('Ingresa tu palabra de seguridad',true);return;}
     const canal=this._recoveryChannel||'email';
     const btn=document.getElementById('clientRecoveryBtn'); if(btn){btn.disabled=true;btn.textContent='Enviando...';}
     try{
       const res = await fetch(EDGE_FUNCTIONS_URL + '/recovery-enviar-codigo', {
         method:'POST',
         headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
-        body: JSON.stringify({ correo: email, canal })
+        body: JSON.stringify({ correo: email, canal, palabra_seguridad: palabra })
       });
       const data = await res.json().catch(()=>({}));
       if(!res.ok || data.error){ toast('No se pudo enviar el código: ' + (data.error||'intenta de nuevo'), true); return; }
