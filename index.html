@@ -1116,6 +1116,7 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
               <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn" type="submit">Continuar</button>
             </form>
             <button class="client-auth-link" type="button" onclick="ClienteAuth.openSoporteChat()">¿No recuerdas tu palabra de seguridad? Habla con soporte</button>
+            <button class="client-auth-link" type="button" id="clientRecoveryEmailCodeBtn" onclick="ClienteAuth.recoverEnviarCodigoEmail()">📧 O envíanos un código a tu correo</button>
 
             <!-- ============================================================
                  TWILIO VERIFY (código por correo/SMS/WhatsApp) — DESACTIVADO
@@ -1168,6 +1169,32 @@ tbody tr:hover{background:rgba(255,46,224,.06);}
               <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryBtn2" type="submit">Guardar contraseña nueva</button>
             </form>
             <button class="client-auth-link" type="button" onclick="ClienteAuth.recoverVolverPaso1()">‹ Corregir correo o palabra de seguridad</button>
+          </div>
+          <div id="recoveryStepEmail" class="hide">
+            <p class="hint client-auth-subtitle">Te enviamos un código de 6 dígitos a tu correo (revisa también spam). Escríbelo aquí junto con tu nueva contraseña — el código vence en 15 minutos.</p>
+            <form onsubmit="event.preventDefault(); ClienteAuth.recoverGuardarPasswordConCodigo();">
+              <div class="field">
+                <label>Código recibido por correo</label>
+                <input id="clientRecoveryEmailCode" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6 dígitos" required style="text-align:center; letter-spacing:6px; font-size:22px;">
+              </div>
+              <div class="field">
+                <label>Nueva contraseña</label>
+                <div style="position:relative;">
+                  <input id="clientRecoveryEmailPassword" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres" required style="padding-right:44px; width:100%;">
+                  <button type="button" onclick="togglePwdField('clientRecoveryEmailPassword', this)" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:17px; padding:6px;">👁</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Confirmar contraseña</label>
+                <div style="position:relative;">
+                  <input id="clientRecoveryEmailPassword2" type="password" autocomplete="new-password" placeholder="Repite tu contraseña" required style="padding-right:44px; width:100%;">
+                  <button type="button" onclick="togglePwdField('clientRecoveryEmailPassword2', this)" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:17px; padding:6px;">👁</button>
+                </div>
+              </div>
+              <button class="btn btn-primary btn-block btn-lg" id="clientRecoveryEmailBtn" type="submit">Guardar contraseña nueva</button>
+            </form>
+            <button class="client-auth-link" type="button" onclick="ClienteAuth.recoverReenviarCodigoEmail()">Reenviar código</button>
+            <button class="client-auth-link" type="button" onclick="ClienteAuth.recoverVolverPaso1()">‹ Volver</button>
           </div>
         </div>
       </div>
@@ -2842,12 +2869,17 @@ const ClienteAuth = {
     // paso 2 (nueva contraseña) solo aparece después de pasar el paso 1.
     document.getElementById('recoveryStep1')?.classList.remove('hide');
     document.getElementById('recoveryStep2')?.classList.add('hide');
+    document.getElementById('recoveryStepEmail')?.classList.add('hide');
     const codeEl=document.getElementById('clientRecoveryCode'); if(codeEl) codeEl.value='';
     const p1=document.getElementById('clientRecoveryPassword'); if(p1) p1.value='';
     const p2=document.getElementById('clientRecoveryPassword2'); if(p2) p2.value='';
     const palabraEl=document.getElementById('clientRecoveryPalabra'); if(palabraEl) palabraEl.value='';
+    const emailCodeEl=document.getElementById('clientRecoveryEmailCode'); if(emailCodeEl) emailCodeEl.value='';
+    const ep1=document.getElementById('clientRecoveryEmailPassword'); if(ep1) ep1.value='';
+    const ep2=document.getElementById('clientRecoveryEmailPassword2'); if(ep2) ep2.value='';
     this._recoveryEmail=null;
     this._recoveryPalabra=null;
+    this._recoveryEmailForCode=null;
     // Vuelve siempre a "correo" como canal por defecto al reabrir esta
     // pantalla, y resalta ese botón como activo. Sin efecto visible
     // mientras el bloque de Twilio esté oculto, pero se deja consistente
@@ -2881,6 +2913,7 @@ const ClienteAuth = {
   // equivocó de correo o de palabra de seguridad.
   recoverVolverPaso1(){
     document.getElementById('recoveryStep2')?.classList.add('hide');
+    document.getElementById('recoveryStepEmail')?.classList.add('hide');
     document.getElementById('recoveryStep1')?.classList.remove('hide');
     setTimeout(()=>document.getElementById('clientRecoveryPalabra')?.focus(),40);
   },
@@ -2914,6 +2947,87 @@ const ClienteAuth = {
       if(!cliente){ toast('Correo o palabra de seguridad incorrectos', true); return; }
       toast('Contraseña actualizada correctamente.');
       this._recoveryEmail=null; this._recoveryPalabra=null;
+      document.getElementById('clientEmail').value=email; document.getElementById('clientPassword').value='';
+      this.showLogin();
+    }catch(err){
+      toast('No se pudo actualizar la contraseña: '+(err.message||err), true);
+    }finally{
+      if(btn){btn.disabled=false;btn.textContent='Guardar contraseña nueva';}
+    }
+  },
+  // ============================================================
+  // TERCERA vía de recuperación: código de 6 dígitos por correo, usando el
+  // Gmail del administrador (SMTP, gratis) en vez de la "palabra de
+  // seguridad". No reemplaza ni toca el flujo de arriba
+  // (recoverContinuar/recoverGuardarPassword) ni el chat de soporte — es
+  // una alternativa más para cuando el cliente no recuerda su palabra de
+  // seguridad. Usa una tabla completamente aparte (password_resets, ver
+  // schema_kyc_clientes.sql v10) con códigos de un solo uso que vencen en
+  // 15 minutos; el código fijo guardado al registrarse (recovery_code)
+  // sigue intacto como respaldo. Ver GMAIL_RECOVERY_EDGE_FUNCTIONS.md.
+  // ============================================================
+  _recoveryEmailForCode: null,
+  // Pide a la Edge Function "recovery-email-enviar-codigo" que genere y
+  // envíe el código. La respuesta es siempre {ok:true} exista o no la
+  // cuenta (anti-enumeración, mismo patrón que ya se usaba con Twilio), así
+  // que este formulario nunca revela qué correos están registrados.
+  async recoverEnviarCodigoEmail(){
+    const email=document.getElementById('clientRecoveryEmail').value.trim().toLowerCase();
+    if(!email){toast('Ingresa tu correo electrónico',true); document.getElementById('clientRecoveryEmail')?.focus(); return;}
+    const btn=document.getElementById('clientRecoveryEmailCodeBtn'); if(btn){btn.disabled=true;btn.textContent='Enviando...';}
+    try{
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/recovery-email-enviar-codigo', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
+        body: JSON.stringify({ correo: email })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error){ toast('No se pudo enviar el código: ' + (data.error||'intenta de nuevo'), true); return; }
+      this._recoveryEmailForCode = email;
+      const codeEl=document.getElementById('clientRecoveryEmailCode'); if(codeEl) codeEl.value='';
+      const ep1=document.getElementById('clientRecoveryEmailPassword'); if(ep1) ep1.value='';
+      const ep2=document.getElementById('clientRecoveryEmailPassword2'); if(ep2) ep2.value='';
+      document.getElementById('recoveryStep1')?.classList.add('hide');
+      document.getElementById('recoveryStepEmail')?.classList.remove('hide');
+      toast('Si ese correo tiene una cuenta, te enviamos un código.');
+      setTimeout(()=>document.getElementById('clientRecoveryEmailCode')?.focus(),40);
+    }catch(err){
+      toast('No se pudo enviar el código: ' + (err.message||err), true);
+    }finally{
+      if(btn){btn.disabled=false;btn.textContent='📧 O envíanos un código a tu correo';}
+    }
+  },
+  // Vuelve a pedir el mismo código (por si venció o no llegó) sin perder el
+  // correo ya ingresado.
+  recoverReenviarCodigoEmail(){
+    if(!this._recoveryEmailForCode){ this.recoverVolverPaso1(); return; }
+    const emailEl=document.getElementById('clientRecoveryEmail'); if(emailEl) emailEl.value=this._recoveryEmailForCode;
+    this.recoverEnviarCodigoEmail();
+  },
+  // El RPC "actualizar_password_con_codigo" valida el código (existe, no
+  // vencido, no usado) y cambia la contraseña en un solo paso, llamado
+  // directo con la llave "anon" (no hay ningún secreto de Gmail involucrado
+  // en esta llamada, solo en el envío del correo, que ya ocurrió antes).
+  async recoverGuardarPasswordConCodigo(){
+    const email=this._recoveryEmailForCode;
+    const codigo=document.getElementById('clientRecoveryEmailCode').value.trim();
+    const p1=document.getElementById('clientRecoveryEmailPassword').value;
+    const p2=document.getElementById('clientRecoveryEmailPassword2').value;
+    if(!email){toast('Vuelve a solicitar el código de recuperación',true); this.recoverVolverPaso1(); return;}
+    if(!codigo){toast('Ingresa el código que te enviamos por correo',true);return;}
+    if(!p1||!p2){toast('Completa todos los campos',true);return;}
+    if(p1.length<6){toast('La contraseña debe tener al menos 6 caracteres',true);return;}
+    if(p1!==p2){toast('Las contraseñas no coinciden',true);return;}
+    const btn=document.getElementById('clientRecoveryEmailBtn'); if(btn){btn.disabled=true;btn.textContent='Guardando...';}
+    try{
+      const {data,error} = await sb.rpc('actualizar_password_con_codigo', {
+        p_correo: email, p_codigo: codigo, p_nueva_password: p1
+      });
+      if(error){ toast('No se pudo actualizar la contraseña: '+error.message, true); return; }
+      const cliente = Array.isArray(data) ? data[0] : data;
+      if(!cliente){ toast('Código incorrecto o vencido', true); return; }
+      toast('Contraseña actualizada correctamente.');
+      this._recoveryEmailForCode=null;
       document.getElementById('clientEmail').value=email; document.getElementById('clientPassword').value='';
       this.showLogin();
     }catch(err){
