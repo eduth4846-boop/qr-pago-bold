@@ -1550,6 +1550,20 @@ const NfcKit = {
   // pantalla que dejó un "acerca el tag" pendiente, para no dejar nada
   // pegado que choque con la siguiente operación).
   cancelar(){ this._cancelarAnterior(); },
+  // Pone un botón de "escanear NFC" en estado encendido (rojo, "toca para
+  // apagar") o apagado (su texto normal). Se usa para que TODOS los
+  // botones de lector NFC de la app (entrada, recargar saldo, leer
+  // pulsera en Vender) funcionen igual: un toque enciende y empieza a
+  // escuchar, otro toque en el MISMO botón apaga y cancela — antes solo
+  // se podía encender, y la única forma de "apagarlo" era cambiar de
+  // pestaña o esperar a que llegara un tag.
+  setBtnOn(btn, on, offLabel){
+    if(!btn) return;
+    if(offLabel===undefined) offLabel = btn.dataset.nfcOffLabel;
+    if(!btn.dataset.nfcOffLabel) btn.dataset.nfcOffLabel = offLabel!==undefined ? offLabel : btn.textContent;
+    btn.classList.toggle('btn-danger', !!on);
+    btn.textContent = on ? '🔴 Toca para apagar' : (offLabel!==undefined ? offLabel : btn.dataset.nfcOffLabel);
+  },
   // Variante "continua": llama a onReading(texto) cada vez que se acerca
   // un tag, sin dejar de escuchar (para el lector de la entrada, que debe
   // seguir validando pulseras una tras otra). Devuelve una función para
@@ -5540,6 +5554,12 @@ const AdminApp = {
     document.querySelectorAll('#view-admin .pill-tab').forEach(p=>p.classList.toggle('active', p.dataset.tab===name));
     document.querySelectorAll('#view-admin .tab-pane').forEach(p=>p.classList.add('hide'));
     document.getElementById(name).classList.remove('hide');
+    // Igual que en QRApp.tab()/VTApp.tab(): el admin también puede usar
+    // "Recargar saldo" (dentro de "Wallets") con cámara/NFC — se libera
+    // aquí al cambiar de pestaña para no dejar la cámara o el NFC ocupados.
+    NfcKit.cancelar();
+    WalletKit._staffNfcOn = false;
+    WalletKit.stopStaffScanner();
     if(name==='a-eventos') this.renderEventos();
     if(name==='a-tickets') this.renderTickets();
     if(name==='a-usuarios') this.renderUsuarios();
@@ -7558,6 +7578,7 @@ const QRApp = {
   evento: null,
   historial: [],
   scanner: null,
+  _stopPromise: null,
   identity: null,
   async loadUserList(){
     const {data} = await sb.from('vendedores').select('*').eq('tipo','qr');
@@ -7589,6 +7610,14 @@ const QRApp = {
     // "Push is cancelled due to a new push request"). No hay pérdida:
     // ningún tab arranca NFC automáticamente, siempre es con un botón.
     NfcKit.cancelar();
+    this._nfcOn = false;
+    WalletKit._staffNfcOn = false;
+    // Igual que con NFC: si en "Recargar saldo" quedó la cámara del escáner
+    // QR abierta (el validador tocó "Escanear QR" y cambió de pestaña sin
+    // cerrarla), la liberamos aquí. Si no, la cámara de "Escanear entrada"
+    // no logra abrir (queda "ocupada" por el otro stream) — esto es lo que
+    // se reportó como "no está abriendo la cámara para validar tickets".
+    WalletKit.stopStaffScanner();
     if(name==='q-scan') this.renderScan();
     if(name==='q-hist') this.renderHist();
     if(name==='q-wallet') this.renderWallet();
@@ -7646,23 +7675,49 @@ const QRApp = {
         <div class="row" style="justify-content:center; margin-top:14px;">
           <button class="btn" onclick="QRApp.startScanner()">▶ Iniciar cámara</button>
           <button class="btn" onclick="QRApp.stopScanner()">■ Detener</button>
-          <button class="btn ${nfcSupported?'':'btn-ghost'}" onclick="QRApp.scanNFC()">📶 Escanear NFC</button>
+          <button class="btn ${nfcSupported?'':'btn-ghost'}" id="qrNfcBtn" onclick="QRApp.scanNFC()">📶 Escanear NFC</button>
         </div>
         ${!nfcSupported ? '<p class="hint">NFC solo disponible en Chrome para Android con HTTPS. En este dispositivo usa el escáner QR.</p>':''}
       </div>`;
   },
   async startScanner(){
     if(this.scanner) return;
+    // Si justo se estaba cerrando la cámara (por ejemplo al terminar de
+    // validar un ticket y volver a "Seguir escaneando" muy rápido), hay que
+    // esperar a que ese cierre termine antes de abrir una nueva — si no, el
+    // navegador todavía tiene el stream de la cámara anterior ocupado y
+    // Html5Qrcode.start() falla en silencio o con "No se pudo acceder a la
+    // cámara", aunque la cámara sí funcione. Esto es lo que hacía que la
+    // cámara del validador dejara de abrir después del primer escaneo.
+    if(this._stopPromise){ try{ await this._stopPromise; }catch(e){} }
+    if(this.scanner) return;
     await loadHtml5QrcodeLib();
+    if(this.scanner) return;
     this.scanner = new Html5Qrcode('qr-reader');
     this.scanner.start({facingMode:'environment'}, {fps:10, qrbox:220}, (text)=>{
       this.handleCode(text);
     }, ()=>{}).catch(()=>toast('No se pudo acceder a la cámara', true));
   },
   stopScanner(){
-    if(this.scanner){ this.scanner.stop().then(()=>{ this.scanner.clear(); this.scanner=null; }).catch(()=>{}); }
+    if(this.scanner){
+      const s = this.scanner;
+      this.scanner = null;
+      this._stopPromise = s.stop().then(()=>{ try{ s.clear(); }catch(e){} }).catch(()=>{}).then(()=>{ this._stopPromise = null; });
+    }
   },
   scanNFC(){
+    // Botón tipo interruptor: un toque enciende el lector NFC de la
+    // entrada (queda escuchando pulseras una tras otra), otro toque en el
+    // mismo botón lo apaga.
+    const btn = document.getElementById('qrNfcBtn');
+    if(this._nfcOn){
+      this._nfcOn = false;
+      NfcKit.cancelar();
+      NfcKit.setBtnOn(btn, false);
+      return;
+    }
+    this._nfcOn = true;
+    NfcKit.setBtnOn(btn, true, '📶 Escanear NFC');
     NfcKit.escanearContinuo((text)=>this.handleCode(text), ()=>toast('Acerca el celular a la entrada NFC…'));
   },
   // Guarda cada intento de lectura (válida o fallida) para el consolidado de
@@ -7782,6 +7837,11 @@ const VTApp = {
     // el navegador responde "signal is aborted without reason" en la
     // escritura nueva (el radio NFC del sistema no alcanzó a liberarse).
     NfcKit.cancelar();
+    this._leerTicketNfcOn = false;
+    WalletKit._staffNfcOn = false;
+    // Ver comentario igual en QRApp.tab(): libera la cámara de "Recargar
+    // saldo" si quedó abierta al salir de esa pestaña.
+    WalletKit.stopStaffScanner();
     if(name==='v-vender') this.renderVender();
     if(name==='v-mis') this.renderMis();
     if(name==='v-wallet') this.renderWallet();
@@ -7923,7 +7983,7 @@ const VTApp = {
         <div class="field"><label>Teléfono</label><input id="vVtaTelefono"></div>
         <button class="btn btn-primary btn-block btn-lg" onclick="VTApp.registrarCliente()">Continuar</button>
         <div style="border-top:1px solid var(--border,#333); margin-top:16px; padding-top:14px;">
-          <button class="btn btn-block ${NfcKit.supported()?'':'btn-ghost'}" type="button" onclick="VTApp.leerTicketNFC()">🔍 Leer pulsera/tag NFC (ver a qué ticket está vinculada)</button>
+          <button class="btn btn-block ${NfcKit.supported()?'':'btn-ghost'}" type="button" id="vtLeerTicketNfcBtn" onclick="VTApp.leerTicketNFC()">🔍 Leer pulsera/tag NFC (ver a qué ticket está vinculada)</button>
           ${!NfcKit.supported() ? '<p class="hint" style="margin-top:6px;">NFC solo disponible en Chrome para Android. Usa esto para revisar, antes de vender o reutilizar una pulsera, qué ticket tiene grabado.</p>' : ''}
           <div id="vVtaNfcResultado" style="margin-top:10px;"></div>
         </div>
@@ -7934,9 +7994,22 @@ const VTApp = {
   // reutilizarla o de vincularla, sin tener que ir a "Mis ventas".
   leerTicketNFC(){
     if(!NfcKit.supported()){ toast('Este dispositivo/navegador no soporta NFC (usa Chrome en Android)', true); return; }
+    // Botón tipo interruptor: un toque enciende el lector (espera la
+    // pulsera/tag), otro toque en el MISMO botón lo apaga sin esperar más.
+    const btn = document.getElementById('vtLeerTicketNfcBtn');
+    if(this._leerTicketNfcOn){
+      this._leerTicketNfcOn = false;
+      NfcKit.cancelar();
+      NfcKit.setBtnOn(btn, false);
+      return;
+    }
+    this._leerTicketNfcOn = true;
+    NfcKit.setBtnOn(btn, true, '🔍 Leer pulsera/tag NFC (ver a qué ticket está vinculada)');
     const resBox = document.getElementById('vVtaNfcResultado');
     if(resBox) resBox.innerHTML = `<p class="hint">Acerca la pulsera/tag NFC…</p>`;
     NfcKit.leerUnaVez(()=>toast('Acerca la pulsera/tag NFC…')).then(async (text)=>{
+      this._leerTicketNfcOn = false;
+      NfcKit.setBtnOn(btn, false);
       let codigo = text;
       try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
       const {data} = await sb.from('tickets').select('*').eq('codigo', codigo).limit(1);
@@ -7952,10 +8025,11 @@ const VTApp = {
         <span class="hint">${ticket.estado==='anulado' ? '🚫 Ticket anulado' : (ticket.escaneado ? `✅ Ya fue escaneado en la entrada (${fmtTime(ticket.escaneado_hora)}${ticket.escaneado_por?' · '+escapeHtml(ticket.escaneado_por):''})` : '⏳ Aún no ha sido escaneado en la entrada')}</span>
       </div>`;
     }).catch((e)=>{
-      // Si esta lectura fue cancelada porque otra operación NFC la
-      // reemplazó (ej. un doble toque en el botón), no es un error real
-      // — esa otra operación ya está mostrando su propio estado, así que
-      // no pisamos el mensaje con uno de "error" confuso.
+      this._leerTicketNfcOn = false;
+      NfcKit.setBtnOn(btn, false);
+      // Si esta lectura fue cancelada porque el usuario apagó el botón, o
+      // porque otra operación NFC la reemplazó, no es un error real — no
+      // hace falta pisar el mensaje con uno de "error" confuso.
       if(e && e.nfcCancelado) return;
       if(resBox) resBox.innerHTML = `<p class="hint" style="color:var(--red,#e66);">No se pudo leer: ${escapeHtml(e.message||String(e))}</p>`;
     });
@@ -8729,7 +8803,7 @@ const WalletKit = {
         <p class="hint">Escanea el QR del ticket o acerca la pulsera/tarjeta NFC del cliente, o búscalo manualmente por correo/cédula.</p>
         <div class="row" style="margin-bottom:10px;">
           <button class="btn" onclick="WalletKit.staffScanQR()">📷 Escanear QR</button>
-          <button class="btn ${('NDEFReader' in window)?'':'btn-ghost'}" onclick="WalletKit.staffScanNFC()">📶 Leer NFC</button>
+          <button class="btn ${('NDEFReader' in window)?'':'btn-ghost'}" id="walletStaffNfcBtn-${sfx}" onclick="WalletKit.staffScanNFC()">📶 Leer NFC</button>
         </div>
         <div id="walletStaffScanBox-${sfx}"></div>
         <div class="field"><label>Correo o cédula del cliente</label><input id="walletStaffBuscar-${sfx}" placeholder="correo@ejemplo.com o cédula" onkeydown="if(event.key==='Enter')WalletKit.staffBuscar()"></div>
@@ -8762,6 +8836,21 @@ const WalletKit = {
     }catch(e){
       toast('No se pudo escribir en el NFC: '+(e.message||e), true);
       return false;
+    }
+  },
+  // Corta la cámara del escáner QR de "Recargar saldo" si quedó abierta al
+  // salir de esa pestaña (por ejemplo el validador abre "Recargar saldo",
+  // toca "Escanear QR" y sin cerrar la cámara cambia a "Escanear" para
+  // validar una entrada). Sin esto, el stream de la cámara queda vivo y
+  // ocupado por html5-qrcode, y la siguiente cámara que se intente abrir
+  // (la de entrada, u otra copia de "Recargar saldo") falla en silencio o
+  // con "No se pudo acceder a la cámara", porque casi ningún navegador
+  // permite dos streams de cámara activos al mismo tiempo.
+  stopStaffScanner(){
+    if(this._walletScanner){
+      const s = this._walletScanner;
+      this._walletScanner = null;
+      try{ s.stop().then(()=>{ try{ s.clear(); }catch(e){} }).catch(()=>{}); }catch(e){}
     }
   },
   async staffScanQR(){
@@ -8802,20 +8891,31 @@ const WalletKit = {
     }
   },
   staffScanNFC(){
-    // Evita que un doble-toque en "Leer NFC" dispare dos lecturas: la
-    // segunda cancelaría la primera y el usuario vería un confuso "Lectura
-    // NFC cancelada" sin haber hecho nada raro.
-    if(this._staffNfcBusy) return;
-    this._staffNfcBusy = true;
+    // Botón tipo interruptor: un toque enciende el lector NFC (espera la
+    // pulsera/tarjeta), otro toque en el MISMO botón lo apaga sin esperar
+    // más. Antes un segundo toque mientras esperaba simplemente se
+    // ignoraba (no había forma de apagarlo desde el botón).
+    const sfx = this._sfx();
+    const btn = document.getElementById('walletStaffNfcBtn-'+sfx);
+    if(this._staffNfcOn){
+      this._staffNfcOn = false;
+      NfcKit.cancelar();
+      NfcKit.setBtnOn(btn, false);
+      return;
+    }
+    this._staffNfcOn = true;
+    NfcKit.setBtnOn(btn, true, '📶 Leer NFC');
     NfcKit.leerUnaVez(()=>toast('Acerca la pulsera/tarjeta NFC del cliente…')).then((text)=>{
-      this._staffNfcBusy = false;
+      this._staffNfcOn = false;
+      NfcKit.setBtnOn(btn, false);
       let codigo = text;
       try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
       this.staffBuscarPorCodigo(codigo);
     }).catch((e)=>{
-      this._staffNfcBusy = false;
-      // Cancelación esperada (otra operación NFC tomó el control) — esa
-      // otra ya muestra su propio estado, no hace falta un toast de error.
+      this._staffNfcOn = false;
+      NfcKit.setBtnOn(btn, false);
+      // Cancelación esperada (el usuario apagó el botón, o otra operación
+      // NFC tomó el control) — no hace falta un toast de error.
       if(e && e.nfcCancelado) return;
       toast('No se pudo leer el NFC: '+(e.message||e), true);
     });
