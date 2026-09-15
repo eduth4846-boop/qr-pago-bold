@@ -5279,15 +5279,25 @@ const UsuarioApp = {
       if(totalEl) totalEl.textContent = money(total);
       const boldBtn = document.getElementById('boldPagarBtn');
       if(boldBtn) boldBtn.setAttribute('onclick', `UsuarioApp.pagarConBold(${total})`);
+      const mpBtn = document.getElementById('mpPagarBtn');
+      if(mpBtn) mpBtn.setAttribute('onclick', `UsuarioApp.pagarConMercadoPago(${total})`);
       const enviarBtn = document.getElementById('pagoEnviarBtn');
       if(enviarBtn) enviarBtn.setAttribute('onclick', `UsuarioApp.enviarComprobante(${total})`);
       return;
     }
+    // La pasarela activa la decide el admin por evento (botón "🔀 Pasarela"
+    // en la tarjeta del evento) — el código de Bold no se toca, solo se
+    // deja de insertar en el HTML cuando el evento usa Mercado Pago.
+    const usaMercadoPago = (evento.pasarela_pago||'bold') === 'mercadopago';
+    const botonPasarela = usaMercadoPago
+      ? `<button class="btn btn-primary btn-block" style="margin-top:14px;" id="mpPagarBtn" onclick="UsuarioApp.pagarConMercadoPago(${total})">💙 Pagar con Mercado Pago</button>
+          <p class="hint" style="text-align:center; margin-top:6px;">Pago 100% seguro procesado por Mercado Pago. Tus tickets se generan automáticamente en cuanto se confirme el pago.</p>`
+      : `<button class="btn btn-primary btn-block" style="margin-top:14px;" id="boldPagarBtn" onclick="UsuarioApp.pagarConBold(${total})">💳 Pagar con Bold (tarjeta, PSE, Nequi)</button>
+          <p class="hint" style="text-align:center; margin-top:6px;">Pago 100% seguro procesado por Bold. Tus tickets se generan automáticamente en cuanto el banco confirma el pago.</p>`;
     const bloquePago = esGratis ? `
           <button class="btn btn-primary btn-block" style="margin-top:14px;" id="gratisConfirmarBtn" onclick="UsuarioApp.confirmarGratis()">🎟️ Confirmar reserva gratuita</button>
           <p class="hint" style="text-align:center; margin-top:6px;">${requiereAutorizacion ? 'Estos tickets no tienen costo, pero quedarán pendientes hasta que el administrador los autorice.' : 'Estos tickets no tienen costo y se generarán automáticamente al confirmar.'}</p>` : `
-          <button class="btn btn-primary btn-block" style="margin-top:14px;" id="boldPagarBtn" onclick="UsuarioApp.pagarConBold(${total})">💳 Pagar con Bold (tarjeta, PSE, Nequi)</button>
-          <p class="hint" style="text-align:center; margin-top:6px;">Pago 100% seguro procesado por Bold. Tus tickets se generan automáticamente en cuanto el banco confirma el pago.</p>
+          ${botonPasarela}
           <details style="margin-top:16px;">
             <summary class="hint" style="cursor:pointer;">Otro método de pago (transferencia manual)</summary>
             ${pago_qr ? `<div class="pago-qr-box"><img src="${pago_qr}"></div><p class="hint" style="text-align:center;">Escanea el código QR para pagar</p>` : `<p class="hint" style="margin-top:12px;">El administrador aún no ha configurado un QR de pago.</p>`}
@@ -5442,6 +5452,53 @@ const UsuarioApp = {
     }catch(err){
       toast('Error iniciando el pago con Bold: '+(err.message||err), true);
       if(btn){ btn.disabled = false; btn.textContent = '💳 Pagar con Bold (tarjeta, PSE, Nequi)'; }
+    }
+  },
+  // Equivalente a pagarConBold() pero para Mercado Pago (evento con
+  // pasarela_pago='mercadopago'). A diferencia de Bold (widget embebido),
+  // Mercado Pago Checkout Pro funciona por REDIRECCIÓN: el navegador sale
+  // de la app hacia la página de pago de Mercado Pago, y vuelve solo
+  // (mp-crear-orden arma la URL de retorno con ?mp-solicitud-id=...,
+  // que checkMpReturn() detecta al recargar la página).
+  async pagarConMercadoPago(total){
+    const btn = document.getElementById('mpPagarBtn');
+    if(btn){ btn.disabled = true; btn.textContent = 'Preparando pago...'; }
+    try{
+      const items = Object.values(this.compra.seleccion).map(x=>({
+        asiento_id: x.asiento.id, zona: x.asiento.zona, categoria: x.asiento.zona,
+        ubicacion_detalle: this.seatLabel(x.asiento), precio: x.precio + CategoriaServicio.valorServicio(this.compra.evento, x.asiento.zona)
+      }));
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/mp-crear-orden', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'Authorization':'Bearer '+SUPA_KEY, 'apikey':SUPA_KEY},
+        body: JSON.stringify({
+          evento_id: this.compra.evento.id,
+          sala: this.compra.sala,
+          nombre: this.compra.comprador.nombre,
+          cedula: this.compra.comprador.cedula,
+          correo: this.compra.comprador.correo,
+          telefono: this.compra.comprador.telefono,
+          items, total,
+          return_url: location.origin + location.pathname
+        })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error){
+        const msg = data.error==='asiento_ocupado'
+          ? 'Una de las ubicaciones que elegiste ya fue tomada por otra persona. Vuelve a elegir en el mapa.'
+          : (data.error||'error desconocido');
+        toast('No se pudo iniciar el pago: '+msg, true);
+        if(btn){ btn.disabled=false; btn.textContent='💙 Pagar con Mercado Pago'; }
+        return;
+      }
+      try{ sessionStorage.setItem('glm_mp_solicitud_id', String(data.solicitud_id)); }catch(e){}
+      // Conservamos la compra en Supabase y dejamos la selección local vacía, igual que con Bold.
+      this.compra.seleccion = {};
+      this.renderSeleccionUI();
+      location.href = data.init_point || data.sandbox_init_point;
+    }catch(err){
+      toast('Error iniciando el pago con Mercado Pago: '+(err.message||err), true);
+      if(btn){ btn.disabled = false; btn.textContent = '💙 Pagar con Mercado Pago'; }
     }
   },
   async enviarComprobante(total){
@@ -6035,6 +6092,7 @@ const AdminApp = {
           <button class="btn btn-sm" onclick="AdminApp.configurarPago('${e.id}')">Config. de pago</button>
           <button class="btn btn-sm ${e.wallet_habilitada?'wallet-badge-enabled':''}" onclick="AdminApp.configurarWallet('${e.id}')">💳 Wallet${e.wallet_habilitada?' (activa)':''}</button>
           <button class="btn btn-sm ${e.didit_habilitado?'wallet-badge-enabled':''}" onclick="AdminApp.configurarDidit('${e.id}')">🪪 Didit${e.didit_habilitado?' (activa)':''}</button>
+          <button class="btn btn-sm ${(e.pasarela_pago||'bold')==='mercadopago'?'wallet-badge-enabled':''}" onclick="AdminApp.configurarPasarela('${e.id}')">🔀 Pasarela: ${(e.pasarela_pago||'bold')==='mercadopago'?'Mercado Pago':'Bold'}</button>
           <button class="btn btn-sm" onclick="AdminApp.exportarEvento('${e.id}')">⬇️ Exportar</button>
           <button class="btn btn-sm" onclick="AdminApp.limpiarFantasmas('${e.id}')">🧹 Limpiar ubicaciones fantasma</button>
         </div>
@@ -6705,6 +6763,44 @@ const AdminApp = {
     if(this.evento && this.evento.id===eventId){ this.evento.wallet_habilitada = wallet_habilitada; this.evento.wallet_permite_negativo = wallet_permite_negativo; }
     document.getElementById('walletCfgModal')?.remove();
     toast('Configuración de wallet guardada');
+    this.renderEventos();
+  },
+
+  /* ---------- PASARELA DE PAGO: Bold o Mercado Pago, por evento ---------- */
+  // Aplica a TODO lo que cobre dinero dentro de ese evento: compra de
+  // tickets (UsuarioApp.pagarConBold/pagarConMercadoPago) y recargas de
+  // wallet (WalletKit.pagarConBoldCliente/pagarConMercadoPagoCliente). El
+  // código de las dos pasarelas queda siempre presente en el archivo —
+  // este botón solo decide cuál de las dos se usa para ESE evento.
+  configurarPasarela(eventId){
+    const e = this.eventos.find(x=>x.id===eventId);
+    if(!e) return;
+    const actual = e.pasarela_pago || 'bold';
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="pasarelaCfgModal">
+        <div class="modal">
+          <div class="section-title"><h2 style="font-size:19px;">🔀 Pasarela de pago · ${escapeHtml(e.nombre)}</h2></div>
+          <p class="hint">Decide con cuál de las dos se cobra la compra de tickets Y las recargas de wallet de este evento. Cambiar esto no afecta pagos ya hechos, solo los que se inicien de ahora en adelante.</p>
+          <label class="chk" style="margin:14px 0 8px; display:flex; align-items:center; gap:8px;"><input type="radio" name="pasarelaCfgOpcion" value="bold" ${actual==='bold'?'checked':''}> 💳 Bold (tarjeta, PSE, Nequi)</label>
+          <label class="chk" style="margin:0 0 4px; display:flex; align-items:center; gap:8px;"><input type="radio" name="pasarelaCfgOpcion" value="mercadopago" ${actual==='mercadopago'?'checked':''}> 💙 Mercado Pago</label>
+          <div class="row" style="margin-top:14px;">
+            <button class="btn btn-ghost" onclick="document.getElementById('pasarelaCfgModal').remove()">Cancelar</button>
+            <button class="btn btn-primary" onclick="AdminApp.guardarPasarela('${eventId}')">Guardar</button>
+          </div>
+        </div>
+      </div>`);
+  },
+  async guardarPasarela(eventId){
+    const e = this.eventos.find(x=>x.id===eventId);
+    if(!e) return;
+    const elegido = document.querySelector('input[name="pasarelaCfgOpcion"]:checked');
+    const pasarela_pago = elegido ? elegido.value : 'bold';
+    const {error} = await sb.from('eventos').update({pasarela_pago}).eq('id', eventId);
+    if(error){ toast('No se pudo guardar: '+error.message, true); return; }
+    e.pasarela_pago = pasarela_pago;
+    if(this.evento && this.evento.id===eventId) this.evento.pasarela_pago = pasarela_pago;
+    document.getElementById('pasarelaCfgModal')?.remove();
+    toast('Pasarela de pago actualizada: '+(pasarela_pago==='mercadopago'?'Mercado Pago':'Bold'));
     this.renderEventos();
   },
 
@@ -8646,8 +8742,11 @@ const WalletKit = {
           <div class="section-title"><h2 style="font-size:19px;">Recargar saldo</h2></div>
           <p class="hint">El saldo se acredita a tu wallet de <b>${escapeHtml((evento&&evento.nombre)||'')}</b>.</p>
           <div class="field"><label>Monto a recargar (COP)</label><input id="wcMonto" type="number" min="1000" step="1000" placeholder="ej: 50000"></div>
+          ${(evento && evento.pasarela_pago)==='mercadopago' ? `
+          <button class="btn btn-primary btn-block" id="wcMpBtn" onclick="WalletKit.pagarConMercadoPagoCliente()">💙 Pagar con Mercado Pago</button>
+          <p class="hint" style="text-align:center; margin-top:6px;">El saldo queda disponible apenas se confirme el pago.</p>` : `
           <button class="btn btn-primary btn-block" id="wcBoldBtn" onclick="WalletKit.pagarConBoldCliente()">💳 Pagar con Bold (tarjeta, PSE, Nequi)</button>
-          <p class="hint" style="text-align:center; margin-top:6px;">El saldo queda disponible apenas el banco confirme el pago.</p>
+          <p class="hint" style="text-align:center; margin-top:6px;">El saldo queda disponible apenas el banco confirme el pago.</p>`}
           <button class="btn btn-block" style="margin-top:10px;" onclick="WalletKit.solicitarTaquilla()">🏧 Pagar en efectivo en la taquilla</button>
           <p class="hint" style="text-align:center; margin-top:6px;">Acércate a la taquilla del evento con tu cédula y paga en efectivo; el vendedor te acredita el saldo ahí mismo.</p>
           <details style="margin-top:16px;">
@@ -8716,6 +8815,35 @@ const WalletKit = {
     }catch(err){
       toast('Error iniciando la recarga con Bold: '+(err.message||err), true);
       if(btn){ btn.disabled=false; btn.textContent='💳 Pagar con Bold (tarjeta, PSE, Nequi)'; }
+    }
+  },
+  // Equivalente a pagarConBoldCliente() pero para Mercado Pago. Por
+  // redirección (Checkout Pro), igual que pagarConMercadoPago() en tickets.
+  async pagarConMercadoPagoCliente(){
+    const comprador = UsuarioApp.identidadWallet();
+    const evento = UsuarioApp.eventoActual();
+    const monto = Number(document.getElementById('wcMonto').value);
+    if(!monto || monto<1000){ toast('Ingresa un monto válido (mínimo $1.000)', true); return; }
+    const btn = document.getElementById('wcMpBtn');
+    if(btn){ btn.disabled=true; btn.textContent='Preparando pago...'; }
+    try{
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/mp-crear-orden-wallet', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY,'apikey':SUPA_KEY},
+        body: JSON.stringify({evento_id: evento.id, nombre:comprador.nombre, cedula:comprador.cedula, correo:comprador.correo, telefono:comprador.telefono, monto, return_url: location.origin + location.pathname})
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error){
+        toast('No se pudo iniciar la recarga: '+(data.error||'este evento aún no tiene configurada la recarga con Mercado Pago (falta desplegar el edge function mp-crear-orden-wallet)'), true);
+        if(btn){ btn.disabled=false; btn.textContent='💙 Pagar con Mercado Pago'; }
+        return;
+      }
+      try{ sessionStorage.setItem('glm_mp_recarga_id', String(data.recarga_id)); }catch(e){}
+      document.getElementById('walletRecargaModal')?.remove();
+      location.href = data.init_point || data.sandbox_init_point;
+    }catch(err){
+      toast('Error iniciando la recarga con Mercado Pago: '+(err.message||err), true);
+      if(btn){ btn.disabled=false; btn.textContent='💙 Pagar con Mercado Pago'; }
     }
   },
   async enviarComprobanteCliente(){
@@ -9047,6 +9175,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   const restored = await Auth.restore().catch(()=>false);
   if(!restored) Router.go('landing');
   checkBoldReturn();
+  checkMpReturn();
   DiditKYC.checkPendingReturn();
   const params = new URLSearchParams(location.search);
   if(params.get('validar')==='1'){
@@ -9212,6 +9341,136 @@ async function checkBoldReturnWallet(orderId){
     }else{
       msg.innerHTML = 'El pago fue aprobado y estamos terminando de acreditar tu saldo. Espera unos segundos y vuelve a abrir "Mi Wallet".';
       clearBoldOrder();
+    }
+  }
+}
+
+/* =========================================================
+   RETORNO DESDE MERCADO PAGO (tras completar el pago)
+   Equivalente a checkBoldReturn()/checkBoldReturnWallet(), pero para
+   eventos con pasarela_pago='mercadopago'. Mercado Pago Checkout Pro
+   funciona por redirección (no por widget embebido como Bold), así que
+   mp-crear-orden/mp-crear-orden-wallet arman la URL de retorno con
+   ?mp-solicitud-id=... o ?mp-recarga-id=... — nunca ambos a la vez.
+========================================================= */
+async function checkMpReturn(){
+  const params = new URLSearchParams(location.search);
+  const solicitudId = params.get('mp-solicitud-id');
+  const recargaId = params.get('mp-recarga-id');
+  if(!solicitudId && !recargaId) return;
+  history.replaceState(null, '', location.pathname + location.hash);
+
+  if(recargaId){
+    await checkMpReturnWallet(recargaId);
+    return;
+  }
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-bg" id="mpResultModal">
+      <div class="modal" style="text-align:center;">
+        <div class="section-title"><h2 style="font-size:19px;">Confirmando tu pago con Mercado Pago…</h2></div>
+        <p class="hint" id="mpResultMsg">Estamos verificando el estado de tu transacción, esto puede tardar unos segundos.</p>
+        <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="try{sessionStorage.removeItem('glm_mp_solicitud_id');}catch(e){};document.getElementById('mpResultModal')?.remove()">Cerrar</button>
+      </div>
+    </div>`);
+
+  let estado = 'pendiente_pago';
+  let ticketsEncontrados = 0;
+
+  for(let i=0;i<10;i++){
+    try{
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/mp-verificar-pago?solicitud_id=' + encodeURIComponent(solicitudId), {
+        headers: {'Authorization':'Bearer '+SUPA_KEY, 'apikey':SUPA_KEY}
+      });
+      const data = await res.json().catch(()=>({}));
+      estado = data.estado || estado;
+
+      const tkRes = await sb.from('tickets').select('id').eq('solicitud_compra_id', solicitudId);
+      ticketsEncontrados = (tkRes.data || []).length;
+
+      if(estado==='rechazada') break;
+      if(estado==='aprobada' && ticketsEncontrados > 0) break;
+    }catch(e){
+      // Se sigue intentando porque el webhook de Mercado Pago puede llegar unos segundos después.
+    }
+    await new Promise(r=>setTimeout(r, 2500));
+  }
+
+  // Igual que en checkBoldReturn(): el regreso recarga la página por
+  // completo, así que dejamos a la persona ya "ingresada" en Mis tickets
+  // si el pago quedó aprobado.
+  if(estado==='aprobada' && ticketsEncontrados>0){
+    try{
+      const {data: solRows} = await sb.from('solicitudes_compra').select('*').eq('id', solicitudId).limit(1);
+      const sol = solRows && solRows[0];
+      if(sol && sol.correo){
+        UsuarioApp.compra = {
+          evento: null, asientos:[], seleccion:{},
+          comprador:{nombre:sol.nombre, cedula:sol.cedula, correo:sol.correo, telefono:sol.telefono},
+          sala: 'admin_usuario_'+sol.correo
+        };
+        Auth.setRole('usuario', {email:sol.correo, value:sol.correo}, 'Cliente');
+        await UsuarioApp.refreshTickets();
+        Router.go('usuario');
+        UsuarioApp.tab('u-tickets');
+      }
+    }catch(e){ console.warn('No se pudo dejar la sesión lista tras el pago con Mercado Pago', e); }
+  }
+
+  const msg = document.getElementById('mpResultMsg');
+  if(msg){
+    try{ sessionStorage.removeItem('glm_mp_solicitud_id'); }catch(e){}
+    if(estado==='aprobada' && ticketsEncontrados>0){
+      msg.innerHTML = '¡Pago confirmado y entradas generadas! 🎉 Ya puedes verlas en "Mis tickets".';
+    }else if(estado==='rechazada'){
+      msg.innerHTML = 'El pago no fue aprobado por Mercado Pago. Puedes intentarlo de nuevo desde "Comprar tickets".';
+    }else if(estado==='aprobada'){
+      msg.innerHTML = 'El pago fue aprobado y estamos terminando de generar tus entradas. Espera unos segundos y consulta "Mis tickets" con tu correo o cédula.';
+    }else{
+      msg.innerHTML = 'No se pudo confirmar ningún pago. Si no realizaste el pago, no se generaron entradas. Puedes cerrar esta ventana y volver a intentarlo cuando quieras.';
+    }
+  }
+}
+
+// Equivalente a checkBoldReturnWallet() pero para Mercado Pago.
+async function checkMpReturnWallet(recargaId){
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-bg" id="mpResultModal">
+      <div class="modal" style="text-align:center;">
+        <div class="section-title"><h2 style="font-size:19px;">Confirmando tu recarga con Mercado Pago…</h2></div>
+        <p class="hint" id="mpResultMsg">Estamos verificando el estado de tu transacción, esto puede tardar unos segundos.</p>
+        <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="try{sessionStorage.removeItem('glm_mp_recarga_id');}catch(e){};document.getElementById('mpResultModal')?.remove()">Cerrar</button>
+      </div>
+    </div>`);
+
+  let estado = 'pendiente_pago';
+
+  for(let i=0;i<10;i++){
+    try{
+      const res = await fetch(EDGE_FUNCTIONS_URL + '/mp-verificar-pago?recarga_id=' + encodeURIComponent(recargaId), {
+        headers: {'Authorization':'Bearer '+SUPA_KEY, 'apikey':SUPA_KEY}
+      });
+      const data = await res.json().catch(()=>({}));
+      estado = data.estado || estado;
+
+      if(estado==='rechazada') break;
+      if(estado==='aprobada') break;
+    }catch(e){
+      // Se sigue intentando porque el webhook de Mercado Pago puede llegar unos segundos después.
+    }
+    await new Promise(r=>setTimeout(r, 2500));
+  }
+
+  const msg = document.getElementById('mpResultMsg');
+  if(msg){
+    try{ sessionStorage.removeItem('glm_mp_recarga_id'); }catch(e){}
+    if(estado==='aprobada'){
+      msg.innerHTML = '¡Pago confirmado! 🎉 Tu saldo ya quedó acreditado en tu wallet.';
+      try{ UsuarioApp.tab('u-wallet'); }catch(e){}
+    }else if(estado==='rechazada'){
+      msg.innerHTML = 'El pago no fue aprobado por Mercado Pago. Puedes intentar la recarga de nuevo desde "Mi Wallet".';
+    }else{
+      msg.innerHTML = 'El pago fue aprobado y estamos terminando de acreditar tu saldo. Espera unos segundos y vuelve a abrir "Mi Wallet".';
     }
   }
 }
