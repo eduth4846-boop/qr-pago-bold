@@ -1,0 +1,18 @@
+{
+  "name": "Cashless Colombia",
+  "short_name": "Cashless CO",
+  "description": "Ticketing y wallet cashless para eventos — Admin, Vendedor y Validador",
+  "id": "/",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#08050f",
+  "theme_color": "#08050f",
+  "lang": "es-CO",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
