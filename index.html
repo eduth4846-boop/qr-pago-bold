@@ -1483,9 +1483,27 @@ const NfcKit = {
     }
     return Promise.resolve();
   },
+  // Marca un error como "cancelación esperada" (una operación nueva
+  // reemplazó a esta) para que quien la llamó pueda distinguirla de un
+  // fallo real y decidir no mostrar un toast de error por algo que en
+  // realidad es normal (por ejemplo, un doble-toque accidental en "Leer
+  // NFC": el segundo toque cancela al primero a propósito).
+  _errCancelado(){
+    const e = new Error('Lectura NFC cancelada');
+    e.nfcCancelado = true;
+    return e;
+  },
   // Lee el próximo tag/pulsera que se acerque y devuelve su texto (una
   // sola lectura). onEsperando() se llama apenas el lector queda listo,
-  // para poder avisar "acerca el tag" en la UI.
+  // para poder avisar "acerca el tag" en la UI. Un fallo de lectura de UN
+  // tag puntual (contacto mal hecho, se retiró muy rápido, etc. — el
+  // evento "readingerror") NO cancela toda la operación: el lector sigue
+  // encendido y escuchando, así que solo avisamos con un toast y dejamos
+  // que se pueda volver a acercar el tag sin tener que tocar el botón de
+  // nuevo. Antes, el primer "readingerror" mataba la lectura entera —
+  // que es exactamente lo que hace que un mal contacto puntual se sienta
+  // como "no se puede leer el NFC" en vez de un simple "vuelve a
+  // intentar".
   async leerUnaVez(onEsperando){
     if(!this.supported()) return Promise.reject(new Error('Este dispositivo/navegador no soporta NFC (usa Chrome en Android)'));
     await this._cancelarAnterior();
@@ -1493,18 +1511,20 @@ const NfcKit = {
     this._controller = controller;
     const reader = new NDEFReader();
     return new Promise((resolve, reject)=>{
-      const onAbort = ()=>{ reject(new Error('Lectura NFC cancelada')); };
+      const onAbort = ()=>{ reject(this._errCancelado()); };
       controller.signal.addEventListener('abort', onAbort, {once:true});
       reader.addEventListener('reading', (event)=>{
         try{
           const record = event.message.records[0];
-          const decoder = new TextDecoder();
+          const decoder = new TextDecoder(record.encoding || 'utf-8');
           const text = decoder.decode(record.data);
           if(this._controller===controller) this._controller = null;
           resolve(text);
         }catch(e){ reject(e); }
       }, {once:true});
-      reader.addEventListener('readingerror', ()=>reject(new Error('No se pudo leer el tag NFC')), {once:true});
+      reader.addEventListener('readingerror', ()=>{
+        if(!controller.signal.aborted) toast('No se pudo leer ese tag, vuelve a acercarlo…', true);
+      });
       reader.scan({signal: controller.signal}).then(()=>{
         if(onEsperando) onEsperando();
       }).catch(reject);
@@ -7932,6 +7952,11 @@ const VTApp = {
         <span class="hint">${ticket.estado==='anulado' ? '🚫 Ticket anulado' : (ticket.escaneado ? `✅ Ya fue escaneado en la entrada (${fmtTime(ticket.escaneado_hora)}${ticket.escaneado_por?' · '+escapeHtml(ticket.escaneado_por):''})` : '⏳ Aún no ha sido escaneado en la entrada')}</span>
       </div>`;
     }).catch((e)=>{
+      // Si esta lectura fue cancelada porque otra operación NFC la
+      // reemplazó (ej. un doble toque en el botón), no es un error real
+      // — esa otra operación ya está mostrando su propio estado, así que
+      // no pisamos el mensaje con uno de "error" confuso.
+      if(e && e.nfcCancelado) return;
       if(resBox) resBox.innerHTML = `<p class="hint" style="color:var(--red,#e66);">No se pudo leer: ${escapeHtml(e.message||String(e))}</p>`;
     });
   },
@@ -8777,11 +8802,23 @@ const WalletKit = {
     }
   },
   staffScanNFC(){
+    // Evita que un doble-toque en "Leer NFC" dispare dos lecturas: la
+    // segunda cancelaría la primera y el usuario vería un confuso "Lectura
+    // NFC cancelada" sin haber hecho nada raro.
+    if(this._staffNfcBusy) return;
+    this._staffNfcBusy = true;
     NfcKit.leerUnaVez(()=>toast('Acerca la pulsera/tarjeta NFC del cliente…')).then((text)=>{
+      this._staffNfcBusy = false;
       let codigo = text;
       try{ const parsed = JSON.parse(text); if(parsed.codigo) codigo = parsed.codigo; }catch(e){}
       this.staffBuscarPorCodigo(codigo);
-    }).catch((e)=>{ toast('No se pudo leer el NFC: '+(e.message||e), true); });
+    }).catch((e)=>{
+      this._staffNfcBusy = false;
+      // Cancelación esperada (otra operación NFC tomó el control) — esa
+      // otra ya muestra su propio estado, no hace falta un toast de error.
+      if(e && e.nfcCancelado) return;
+      toast('No se pudo leer el NFC: '+(e.message||e), true);
+    });
   },
   async staffBuscarPorCodigo(codigo){
     const {data} = await sb.from('tickets').select('*').eq('codigo', codigo).limit(1);
