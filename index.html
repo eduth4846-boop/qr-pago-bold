@@ -5495,7 +5495,7 @@ const UsuarioApp = {
       // Conservamos la compra en Supabase y dejamos la selección local vacía, igual que con Bold.
       this.compra.seleccion = {};
       this.renderSeleccionUI();
-      location.href = data.sandbox_init_point || data.init_point;
+      location.href = (data.usar_sandbox ? data.sandbox_init_point : data.init_point) || data.init_point || data.sandbox_init_point;
     }catch(err){
       toast('Error iniciando el pago con Mercado Pago: '+(err.message||err), true);
       if(btn){ btn.disabled = false; btn.textContent = '💙 Pagar con Mercado Pago'; }
@@ -8840,7 +8840,7 @@ const WalletKit = {
       }
       try{ sessionStorage.setItem('glm_mp_recarga_id', String(data.recarga_id)); }catch(e){}
       document.getElementById('walletRecargaModal')?.remove();
-      location.href = data.sandbox_init_point || data.init_point;
+      location.href = (data.usar_sandbox ? data.sandbox_init_point : data.init_point) || data.init_point || data.sandbox_init_point;
     }catch(err){
       toast('Error iniciando la recarga con Mercado Pago: '+(err.message||err), true);
       if(btn){ btn.disabled=false; btn.textContent='💙 Pagar con Mercado Pago'; }
